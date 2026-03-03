@@ -7,7 +7,21 @@ on:
     branches: [ "master" ]
 
 jobs:
-  build-backend:
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gitleaks (secrets scanning)
+        uses: gitleaks/gitleaks-action@v2
+  sast-semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/ci
+ build-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +54,44 @@ jobs:
           pip install -r requirements.txt
           pytest || true
 
+  deps-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          cd backend
+          pip-audit -r requirements.txt
+
+  deps-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: npm audit
+        run: |
+          cd frontend
+          npm install
+          npm audit --audit-level=high
+
+  container-scan-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t backend:ci ./backend
+
+      - name: Trivy scan (backend image)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: backend:ci
+          format: table
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
