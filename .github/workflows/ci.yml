@@ -2,65 +2,82 @@ name: CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 jobs:
+
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Gitleaks (secrets scanning)
         uses: gitleaks/gitleaks-action@v2
+
+
   sast-semgrep:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Semgrep SAST
         uses: returntocorp/semgrep-action@v1
         with:
           config: p/ci
- build-backend:
+
+
+  build-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build backend image
         run: docker build -t backend ./backend
+
 
   build-frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
       - name: Build frontend
         run: |
           cd frontend
           npm install
           npm run build
 
+
   test-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Install deps and run tests
         run: |
           cd backend
           pip install -r requirements.txt
           pytest || true
 
+
   deps-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: pip-audit
         run: |
           python -m pip install --upgrade pip
@@ -68,23 +85,28 @@ jobs:
           cd backend
           pip-audit -r requirements.txt
 
+
   deps-frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
       - name: npm audit
         run: |
           cd frontend
           npm install
           npm audit --audit-level=high
 
+
   container-scan-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build backend image
         run: docker build -t backend:ci ./backend
 
