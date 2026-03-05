@@ -7,77 +7,68 @@ on:
     branches: ["master"]
 
 jobs:
-
+  # 1) Secret scanning
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Gitleaks (secrets scanning)
         uses: gitleaks/gitleaks-action@v2
 
-
+  # 2) SAST
   sast-semgrep:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Semgrep SAST
         uses: returntocorp/semgrep-action@v1
         with:
           config: p/ci
 
-
+  # 3) Build backend image
   build-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build backend image
         run: docker build -t backend ./backend
 
-
+  # 4) Build frontend
   build-frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Build frontend
         run: |
           cd frontend
           npm install
           npm run build
 
-
+  # 5) Tests backend
   test-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install deps and run tests
         run: |
           cd backend
           pip install -r requirements.txt
           pytest || true
 
-
+  # 6) Dependency scanning (Python)
   deps-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: pip-audit
         run: |
           python -m pip install --upgrade pip
@@ -85,31 +76,27 @@ jobs:
           cd backend
           pip-audit -r requirements.txt
 
-
+  # 7) Dependency scanning (Node)
   deps-frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: npm audit
         run: |
           cd frontend
           npm install
           npm audit --audit-level=high
 
-
+  # 8) Container security scan (Trivy)
   container-scan-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build backend image
         run: docker build -t backend:ci ./backend
-
       - name: Trivy scan (backend image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -117,3 +104,82 @@ jobs:
           format: table
           exit-code: "1"
           severity: "CRITICAL,HIGH"
+
+  # ---------------------------
+  # ✅ AMELIORATION 1: IaC scan
+  # ---------------------------
+  iac-scan-checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkov (IaC scanning)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: dockerfile,docker_compose,secrets
+
+  # ---------------------------
+  # ✅ AMELIORATION 2: SBOM
+  # ---------------------------
+  sbom-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Génère un SBOM (CycloneDX JSON) pour tout le repo
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.cyclonedx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+
+  # ---------------------------
+  # ✅ AMELIORATION 3: DAST
+  # ---------------------------
+  dast-zap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Démarrer l'app en CI via Docker Compose (minimum: db + backend)
+      - name: Start services (Docker Compose)
+        run: |
+          docker compose up -d db backend
+          echo "Waiting for backend health..."
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/api/v1/utils/health >/dev/null 2>&1; then
+              echo "Backend is up!"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Backend did not become ready in time"
+          docker compose ps
+          docker compose logs --no-color backend || true
+          exit 1
+
+      # Scan dynamique OWASP ZAP (baseline, non-intrusif)
+      - name: OWASP ZAP Baseline Scan (DAST)
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: http://localhost:8000
+          # fail si ZAP trouve des alertes "HIGH"
+          fail_action: true
+          # rapport généré dans le workspace
+          report_file: zap_report.html
+
+      - name: Upload ZAP report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-report
+          path: zap_report.html
+
+      - name: Stop services
+        if: always()
+        run: docker compose down -v
