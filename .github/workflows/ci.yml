@@ -31,8 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build backend image
-        run: docker build -t backend ./backend
-
+        run: docker build -f backend/Dockerfile -t backend .
   # 4) Build frontend
   build-frontend:
     runs-on: ubuntu-latest
@@ -96,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build backend image
-        run: docker build -t backend:ci ./backend
+        run: docker build -f backend/Dockerfile -t backend:ci .
       - name: Trivy scan (backend image)
         uses: aquasecurity/trivy-action@0.24.0
         with:
