@@ -77,7 +77,12 @@ jobs:
 
       - name: Install deps and run tests
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
+          POSTGRES_SERVER: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: testdb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/testdb
         run: |
           cd backend
           uv sync --frozen
