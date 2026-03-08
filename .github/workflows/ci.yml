@@ -49,6 +49,22 @@ jobs:
   # 5) Tests backend
   test-backend:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +74,10 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
+
       - name: Install deps and run tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
         run: |
           cd backend
           uv sync --frozen
