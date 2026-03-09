@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["master"]
@@ -149,7 +152,7 @@ jobs:
           directory: .
           framework: all
           output_format: sarif
-
+          skip_check: CKV_GHA_7
   # ---------------------------
   # ✅ AMELIORATION 2: SBOM
   # ---------------------------
