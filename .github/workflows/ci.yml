@@ -75,7 +75,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Install deps and run tests
+      - name: Install deps, migrate DB and run tests
         env:
           POSTGRES_SERVER: localhost
           POSTGRES_PORT: 5432
@@ -86,6 +86,7 @@ jobs:
         run: |
           cd backend
           uv sync --frozen
+          uv run alembic upgrade head
           uv run pytest
   # 6) Dependency scanning (Python)
   deps-backend:
