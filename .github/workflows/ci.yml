@@ -189,7 +189,7 @@ jobs:
           docker compose up -d db backend
           echo "Waiting for backend health..."
           for i in {1..30}; do
-            if curl -fsS http://localhost:8000/api/v1/utils/health >/dev/null 2>&1; then
+            if curl -fsS http://localhost:8000/api/v1/utils/health-check > /dev/null 2>&1; then
               echo "Backend is up!"
               exit 0
             fi
