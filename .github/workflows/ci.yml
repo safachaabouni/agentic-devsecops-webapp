@@ -288,6 +288,28 @@ jobs:
           fail_action: false
           cmd_options: "-J zap_report.json -r zap_report.html"
 
+      - name: Locate ZAP reports
+        if: always()
+        run: |
+          echo "Searching for ZAP reports..."
+          find . -type f \( -name "zap_report.json" -o -name "zap_report.html" \) || true
+
+      - name: Copy ZAP reports to workspace root
+        if: always()
+        run: |
+          JSON_FILE=$(find . -type f -name "zap_report.json" | head -n 1)
+          HTML_FILE=$(find . -type f -name "zap_report.html" | head -n 1)
+
+          if [ -n "$JSON_FILE" ]; then
+            cp "$JSON_FILE" ./zap_report.json
+          fi
+
+          if [ -n "$HTML_FILE" ]; then
+            cp "$HTML_FILE" ./zap_report.html
+          fi
+
+          ls -l zap_report.json zap_report.html 2>/dev/null || true
+
       - name: Upload ZAP artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -301,7 +323,6 @@ jobs:
       - name: Stop services
         if: always()
         run: docker compose down -v
-
   # 12) AI security agent = final decision maker
   ai-security-agent:
     runs-on: ubuntu-latest
