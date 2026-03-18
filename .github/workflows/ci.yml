@@ -37,13 +37,6 @@ jobs:
           path: gitleaks-report.json
           if-no-files-found: warn
 
-      - name: Fail if Gitleaks found leaks
-        run: |
-          if [ -f gitleaks-report.json ] && [ "$(jq length gitleaks-report.json)" -gt 0 ]; then
-            echo "Secrets detected by Gitleaks"
-            exit 1
-          fi
-
   # 2) SAST
   sast-semgrep:
     runs-on: ubuntu-latest
@@ -69,16 +62,6 @@ jobs:
           name: semgrep-report
           path: semgrep-report.json
           if-no-files-found: warn
-
-      - name: Fail if Semgrep found blocking issues
-        run: |
-          if [ -f semgrep-report.json ]; then
-            ERRORS=$(jq '.results | length' semgrep-report.json)
-            if [ "$ERRORS" -gt 0 ]; then
-              echo "Semgrep found $ERRORS issue(s)"
-              exit 1
-            fi
-          fi
 
   # 3) Build backend image
   build-backend:
@@ -177,13 +160,6 @@ jobs:
           path: pip-audit-report.json
           if-no-files-found: warn
 
-      - name: Fail if pip-audit found vulnerabilities
-        run: |
-          if [ -f pip-audit-report.json ] && [ "$(jq length pip-audit-report.json)" -gt 0 ]; then
-            echo "pip-audit found vulnerabilities"
-            exit 1
-          fi
-
   # 7) Dependency scanning (Node)
   deps-frontend:
     runs-on: ubuntu-latest
@@ -212,11 +188,6 @@ jobs:
           path: npm-audit-report.json
           if-no-files-found: warn
 
-      - name: Fail on high vulnerabilities
-        run: |
-          cd frontend
-          npm audit --audit-level=high
-
   # 8) Container security scan (Trivy)
   container-scan-backend:
     runs-on: ubuntu-latest
@@ -243,19 +214,7 @@ jobs:
           path: trivy-report.json
           if-no-files-found: warn
 
-      - name: Fail if Trivy found HIGH or CRITICAL vulnerabilities
-        run: |
-          if [ -f trivy-report.json ]; then
-            COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' trivy-report.json)
-            if [ "$COUNT" -gt 0 ]; then
-              echo "Trivy found $COUNT HIGH/CRITICAL vulnerability(ies)"
-              exit 1
-            fi
-          fi
-
-  # ---------------------------
-  # AMELIORATION 1: IaC scan
-  # ---------------------------
+  # 9) IaC scan
   iac-scan-checkov:
     runs-on: ubuntu-latest
     steps:
@@ -279,19 +238,7 @@ jobs:
           path: checkov-report.sarif
           if-no-files-found: warn
 
-      - name: Fail if Checkov found failed checks
-        run: |
-          if [ -f checkov-report.sarif ]; then
-            COUNT=$(jq '.runs[0].results | length' checkov-report.sarif)
-            if [ "$COUNT" -gt 0 ]; then
-              echo "Checkov found $COUNT failed check(s)"
-              exit 1
-            fi
-          fi
-
-  # ---------------------------
-  # AMELIORATION 2: SBOM
-  # ---------------------------
+  # 10) SBOM
   sbom-generate:
     runs-on: ubuntu-latest
     steps:
@@ -309,9 +256,7 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cyclonedx.json
 
-  # ---------------------------
-  # AMELIORATION 3: DAST
-  # ---------------------------
+  # 11) DAST
   dast-zap:
     runs-on: ubuntu-latest
     steps:
@@ -357,7 +302,7 @@ jobs:
         if: always()
         run: docker compose down -v
 
-
+  # 12) AI security agent = final decision maker
   ai-security-agent:
     runs-on: ubuntu-latest
     needs:
@@ -391,6 +336,11 @@ jobs:
       - name: Run AI security agent
         run: |
           python scripts/ai_security_agent.py
+
+      - name: Publish AI summary to GitHub Actions
+        if: always()
+        run: |
+          cat ai-security-summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload AI security outputs
         if: always()

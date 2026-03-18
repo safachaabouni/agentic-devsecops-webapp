@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 
@@ -40,8 +39,17 @@ def count_semgrep():
 def count_pip_audit():
     path = find_first_file("pip-audit-report.json")
     data = load_json(path) if path else None
+
     if isinstance(data, list):
         return len(data)
+
+    if isinstance(data, dict):
+        if isinstance(data.get("dependencies"), list):
+            vuln_count = 0
+            for dep in data["dependencies"]:
+                vuln_count += len(dep.get("vulns", []))
+            return vuln_count
+
     return 0
 
 
@@ -49,7 +57,7 @@ def count_npm_audit():
     path = find_first_file("npm-audit-report.json")
     data = load_json(path) if path else None
     if not isinstance(data, dict):
-        return {"high": 0, "critical": 0, "moderate": 0, "low": 0, "total": 0}
+        return {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0, "total": 0}
 
     metadata = data.get("metadata", {})
     vulns = metadata.get("vulnerabilities", {})
@@ -129,7 +137,6 @@ def has_sbom():
 
 
 def decide_status(summary):
-    # Règles simples et défendables pour un PFE
     if summary["gitleaks_count"] > 0:
         return "BLOCKED", "Secrets detected in repository"
 
@@ -147,6 +154,7 @@ def decide_status(summary):
         or summary["pip_audit_count"] > 0
         or summary["checkov_count"] > 0
         or summary["zap"]["Medium"] > 0
+        or summary["zap"]["High"] > 0
     ):
         return "WARNING", "Security findings detected and require review"
 
@@ -157,25 +165,25 @@ def build_priority_actions(summary, status):
     actions = []
 
     if summary["gitleaks_count"] > 0:
-        actions.append("Remove exposed secrets and rotate compromised credentials.")
+        actions.append("Remove exposed secrets from the repository and rotate compromised credentials.")
 
     if summary["trivy"]["CRITICAL"] > 0 or summary["trivy"]["HIGH"] > 0:
-        actions.append("Update vulnerable packages in the backend Docker image.")
+        actions.append("Update vulnerable packages and base layers in the backend Docker image.")
 
     if summary["pip_audit_count"] > 0:
-        actions.append("Review and update vulnerable Python dependencies.")
+        actions.append("Review and update vulnerable Python dependencies in the backend.")
 
     if summary["npm_audit"]["high"] > 0 or summary["npm_audit"]["critical"] > 0:
-        actions.append("Review and update vulnerable Node.js dependencies.")
+        actions.append("Review and update vulnerable Node.js dependencies in the frontend.")
 
     if summary["semgrep_count"] > 0:
-        actions.append("Inspect Semgrep findings and fix insecure code patterns.")
+        actions.append("Inspect Semgrep findings and correct insecure code patterns.")
 
     if summary["checkov_count"] > 0:
-        actions.append("Review GitHub Actions workflow hardening recommendations from Checkov.")
+        actions.append("Review GitHub Actions workflow hardening recommendations reported by Checkov.")
 
     if summary["zap"]["High"] > 0 or summary["zap"]["Medium"] > 0:
-        actions.append("Review OWASP ZAP findings on exposed application endpoints.")
+        actions.append("Review OWASP ZAP findings affecting exposed endpoints and runtime behavior.")
 
     if not actions and status == "SAFE":
         actions.append("Maintain current controls and continue monitoring future pipeline runs.")
@@ -249,6 +257,9 @@ def main():
 
     print("AI security agent completed.")
     print(json.dumps({"status": status, "reason": reason}, indent=2))
+
+    if status == "BLOCKED":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
