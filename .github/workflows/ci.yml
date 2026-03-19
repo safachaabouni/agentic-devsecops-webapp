@@ -324,57 +324,57 @@ jobs:
         if: always()
         run: docker compose down -v
   # 12) AI security agent = final decision maker
-  ai-security-agent:
-  runs-on: ubuntu-latest
-  needs:
-    - secrets-scan
-    - sast-semgrep
-    - deps-backend
-    - deps-frontend
-    - container-scan-backend
-    - iac-scan-checkov
-    - sbom-generate
-    - dast-zap
-  if: always()
+    ai-security-agent:
+    runs-on: ubuntu-latest
+    needs:
+      - secrets-scan
+      - sast-semgrep
+      - deps-backend
+      - deps-frontend
+      - container-scan-backend
+      - iac-scan-checkov
+      - sbom-generate
+      - dast-zap
+    if: always()
 
-  steps:
-    - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: Install Python dependencies
-      run: |
-        pip install openai
+      - name: Install Python dependencies
+        run: |
+          pip install openai
 
-    - name: Download all scan artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
+      - name: Download all scan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-    - name: Show downloaded artifacts
-      run: |
-        echo "Artifacts tree:"
-        find artifacts -maxdepth 3 -type f | sort || true
+      - name: Show downloaded artifacts
+        run: |
+          echo "Artifacts tree:"
+          find artifacts -maxdepth 3 -type f | sort || true
 
-    - name: Run AI security agent
-      env:
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      run: |
-        python scripts/ai_security_agent.py
+      - name: Run AI security agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/ai_security_agent.py
 
-    - name: Publish AI summary to GitHub Actions
-      if: always()
-      run: |
-        cat ai-security-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish AI summary to GitHub Actions
+        if: always()
+        run: |
+          cat ai-security-summary.md >> "$GITHUB_STEP_SUMMARY"
 
-    - name: Upload AI security outputs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: ai-security-summary
-        path: |
-          ai-security-summary.md
-          ai-decision.json
-        if-no-files-found: warn
+      - name: Upload AI security outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-security-summary
+          path: |
+            ai-security-summary.md
+            ai-decision.json
+          if-no-files-found: warn
