@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+
+from openai import OpenAI
 
 
 ARTIFACTS_DIR = Path("artifacts")
@@ -146,6 +149,13 @@ def decide_status(summary):
     if summary["npm_audit"]["critical"] > 0:
         return "BLOCKED", "Critical vulnerabilities found in frontend dependencies"
 
+    # Règles renforcées
+    if summary["trivy"]["HIGH"] >= 100:
+        return "BLOCKED", "Too many high-severity vulnerabilities found in backend container image"
+
+    if summary["npm_audit"]["high"] >= 3:
+        return "BLOCKED", "Too many high-severity vulnerabilities found in frontend dependencies"
+
     if summary["trivy"]["HIGH"] > 0 or summary["npm_audit"]["high"] > 0:
         return "WARNING", "High-severity vulnerabilities detected"
 
@@ -191,12 +201,56 @@ def build_priority_actions(summary, status):
     return actions[:5]
 
 
-def write_outputs(summary, status, reason, actions):
+def generate_llm_analysis(summary, status, reason, actions):
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
+You are a DevSecOps AI security analyst.
+
+You are given aggregated CI security results for a web application pipeline.
+Write a concise professional security summary in Markdown.
+
+Requirements:
+- Start with a short executive summary.
+- Explain the security posture.
+- Highlight the most important risks.
+- Prioritize remediation actions.
+- Be precise and practical.
+- Keep it readable for developers and project supervisors.
+- Do not invent findings.
+- Base everything only on the data below.
+
+Aggregated data:
+{json.dumps(summary, indent=2)}
+
+Computed pipeline status: {status}
+Reason: {reason}
+
+Priority actions:
+{json.dumps(actions, indent=2)}
+"""
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt,
+        )
+        return response.output_text.strip()
+    except Exception as e:
+        return f"## LLM analysis unavailable\n\nError while generating LLM summary: {str(e)}"
+
+
+def write_outputs(summary, status, reason, actions, llm_analysis):
     decision = {
         "status": status,
         "reason": reason,
         "summary": summary,
         "priority_actions": actions,
+        "llm_enabled": llm_analysis is not None,
     }
 
     with open("ai-decision.json", "w", encoding="utf-8") as f:
@@ -235,6 +289,12 @@ def write_outputs(summary, status, reason, actions):
         lines.append(f"- {action}")
     lines.append("")
 
+    if llm_analysis:
+        lines.append("## LLM-based security analysis")
+        lines.append("")
+        lines.append(llm_analysis)
+        lines.append("")
+
     with open("ai-security-summary.md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
@@ -253,7 +313,8 @@ def main():
 
     status, reason = decide_status(summary)
     actions = build_priority_actions(summary, status)
-    write_outputs(summary, status, reason, actions)
+    llm_analysis = generate_llm_analysis(summary, status, reason, actions)
+    write_outputs(summary, status, reason, actions, llm_analysis)
 
     print("AI security agent completed.")
     print(json.dumps({"status": status, "reason": reason}, indent=2))
