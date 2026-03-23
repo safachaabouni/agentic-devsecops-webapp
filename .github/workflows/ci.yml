@@ -378,3 +378,51 @@ jobs:
             ai-security-summary.md
             ai-decision.json
           if-no-files-found: warn
+  # 12) AI Remediation agent
+  ai-remediation-agent:
+    runs-on: ubuntu-latest
+    needs:
+      - ai-security-agent
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          pip install openai
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Show downloaded artifacts
+        run: |
+          echo "Artifacts tree:"
+          find artifacts -maxdepth 3 -type f | sort || true
+
+      - name: Run AI remediation agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/ai_remediation_agent.py
+
+      - name: Publish remediation summary
+        if: always()
+        run: |
+          cat remediation-plan.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload remediation outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-remediation-plan
+          path: |
+            remediation-plan.md
+            remediation-plan.json
+          if-no-files-found: warn
