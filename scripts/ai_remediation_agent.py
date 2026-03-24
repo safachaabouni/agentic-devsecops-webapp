@@ -1,12 +1,12 @@
 import json
+import os
 from pathlib import Path
 
-import requests
+from groq import Groq
 
 
 ARTIFACTS_DIR = Path("artifacts")
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:1.5b"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
 def load_json(path: Path):
@@ -33,31 +33,63 @@ def find_first_file(filename: str):
     return matches[0] if matches else None
 
 
+def summarize_trivy(trivy):
+    counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0, "total": 0}
+    if not isinstance(trivy, dict):
+        return counts
+
+    for result in trivy.get("Results", []):
+        for vuln in result.get("Vulnerabilities", []) or []:
+            sev = vuln.get("Severity", "UNKNOWN")
+            if sev not in counts:
+                counts[sev] = 0
+            counts[sev] += 1
+
+    counts["total"] = sum(v for k, v in counts.items() if k != "total")
+    return counts
+
+
+def summarize_checkov(checkov):
+    if not isinstance(checkov, dict):
+        return 0
+    runs = checkov.get("runs", [])
+    if not runs:
+        return 0
+    return len(runs[0].get("results", []))
+
+
 def build_remediation_data():
     ai_decision = load_json(find_first_file("ai-decision.json") or Path("missing.json"))
+    ai_summary = load_text(find_first_file("ai-security-summary.md") or Path("missing.md"))
     npm_audit = load_json(find_first_file("npm-audit-report.json") or Path("missing.json"))
     pip_audit = load_json(find_first_file("pip-audit-report.json") or Path("missing.json"))
     trivy = load_json(find_first_file("trivy-report.json") or Path("missing.json"))
     semgrep = load_json(find_first_file("semgrep-report.json") or Path("missing.json"))
     checkov = load_json(find_first_file("checkov-report.sarif") or Path("missing.json"))
-    summary_md = load_text(find_first_file("ai-security-summary.md") or Path("missing.md"))
 
-    return {
+    reduced = {
         "ai_decision": ai_decision,
-        "npm_audit": npm_audit,
-        "pip_audit": pip_audit,
-        "trivy": trivy,
-        "semgrep": semgrep,
-        "checkov": checkov,
-        "ai_security_summary_markdown": summary_md,
+        "security_summary_excerpt": ai_summary[:4000] if ai_summary else None,
+        "npm_vulnerabilities": (
+            npm_audit.get("metadata", {}).get("vulnerabilities", {}) if isinstance(npm_audit, dict) else None
+        ),
+        "pip_audit_present": pip_audit is not None,
+        "trivy_totals": summarize_trivy(trivy),
+        "semgrep_result_count": len(semgrep.get("results", [])) if isinstance(semgrep, dict) else 0,
+        "checkov_result_count": summarize_checkov(checkov),
     }
+    return reduced
 
 
-def generate_ollama_remediation(remediation_data):
+def generate_groq_remediation(remediation_data):
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return "# AI Remediation Plan\n\nGroq remediation unavailable.\n\nGROQ_API_KEY is not configured.\n"
+
     prompt = f"""
 You are a DevSecOps remediation advisor.
 
-Analyze the security decision and scan outputs below and produce
+Analyze the security decision and summarized scan outputs below and produce
 a practical remediation plan in Markdown.
 
 Requirements:
@@ -68,29 +100,28 @@ Requirements:
 - Mention likely affected areas (backend image, frontend dependencies, workflow, etc.).
 - Do not invent facts.
 - If some reports are missing, say so briefly.
-- Make the output useful for a student engineer writing a PFE report and for developers fixing the issues.
+- Use only the information explicitly present below.
+- Do not mention packages, tools, incidents, or exploit scenarios that are not explicitly present in the input.
 
 Data:
-{json.dumps(remediation_data, indent=2)[:20000]}
+{json.dumps(remediation_data, indent=2)}
 """
 
     try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-            },
-            timeout=180,
+        client = Groq(api_key=api_key)
+        chat_completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a precise DevSecOps remediation advisor. Only use the provided data."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
         )
-        response.raise_for_status()
-        data = response.json()
-        return data.get("response", "").strip()
+        return (chat_completion.choices[0].message.content or "").strip()
     except Exception as e:
         return (
             "# AI Remediation Plan\n\n"
-            f"Ollama remediation unavailable.\n\nError: {str(e)}\n"
+            f"Groq remediation unavailable.\n\nError: {str(e)}\n"
         )
 
 
@@ -101,7 +132,7 @@ def build_structured_plan(remediation_data, remediation_markdown):
 
     has_real_llm_output = (
         remediation_markdown is not None
-        and "Ollama remediation unavailable" not in remediation_markdown
+        and "Groq remediation unavailable" not in remediation_markdown
     )
 
     structured = {
@@ -109,8 +140,8 @@ def build_structured_plan(remediation_data, remediation_markdown):
         "reason": reason,
         "generated_by": "ai-remediation-agent",
         "has_llm_output": has_real_llm_output,
-        "llm_provider": "ollama",
-        "llm_model": OLLAMA_MODEL,
+        "llm_provider": "groq",
+        "llm_model": GROQ_MODEL,
     }
 
     with open("remediation-plan.json", "w", encoding="utf-8") as f:
@@ -122,7 +153,7 @@ def build_structured_plan(remediation_data, remediation_markdown):
 
 def main():
     remediation_data = build_remediation_data()
-    remediation_markdown = generate_ollama_remediation(remediation_data)
+    remediation_markdown = generate_groq_remediation(remediation_data)
     build_structured_plan(remediation_data, remediation_markdown)
     print("AI remediation agent completed.")
 

@@ -325,7 +325,7 @@ jobs:
         run: docker compose down -v
   # 12) AI security agent = final decision maker
   ai-security-agent:
-    runs-on: [self-hosted, linux, ollama]
+    runs-on: ubuntu-latest
     needs:
       - secrets-scan
       - sast-semgrep
@@ -348,7 +348,7 @@ jobs:
         run: |
           python3 -m venv .venv
           . .venv/bin/activate
-          pip install requests
+          pip install groq
 
       - name: Download all scan artifacts
         uses: actions/download-artifact@v4
@@ -361,6 +361,8 @@ jobs:
           find artifacts -maxdepth 3 -type f | sort || true
 
       - name: Run AI security agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           . .venv/bin/activate
           python3 scripts/ai_security_agent.py
@@ -381,7 +383,7 @@ jobs:
           if-no-files-found: warn
   # 13) AI Remediation agent
   ai-remediation-agent:
-    runs-on: [self-hosted, linux, ollama]
+    runs-on: ubuntu-latest
     needs:
       - ai-security-agent
     if: always()
@@ -397,7 +399,7 @@ jobs:
         run: |
           python3 -m venv .venv
           . .venv/bin/activate
-          pip install requests
+          pip install groq
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -410,6 +412,8 @@ jobs:
           find artifacts -maxdepth 3 -type f | sort || true
 
       - name: Run AI remediation agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           . .venv/bin/activate
           python3 scripts/ai_remediation_agent.py

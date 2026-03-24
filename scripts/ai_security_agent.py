@@ -1,12 +1,12 @@
 import json
+import os
 from pathlib import Path
 
-import requests
+from groq import Groq
 
 
 ARTIFACTS_DIR = Path("artifacts")
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:1.5b"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
 def load_json(path: Path):
@@ -47,12 +47,11 @@ def count_pip_audit():
     if isinstance(data, list):
         return len(data)
 
-    if isinstance(data, dict):
-        if isinstance(data.get("dependencies"), list):
-            vuln_count = 0
-            for dep in data["dependencies"]:
-                vuln_count += len(dep.get("vulns", []))
-            return vuln_count
+    if isinstance(data, dict) and isinstance(data.get("dependencies"), list):
+        vuln_count = 0
+        for dep in data["dependencies"]:
+            vuln_count += len(dep.get("vulns", []))
+        return vuln_count
 
     return 0
 
@@ -201,7 +200,11 @@ def build_priority_actions(summary, status):
     return actions[:5]
 
 
-def generate_ollama_analysis(summary, status, reason, actions):
+def generate_groq_analysis(summary, status, reason, actions):
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return "## Groq analysis unavailable\n\nGROQ_API_KEY is not configured."
+
     prompt = f"""
 You are a DevSecOps AI security analyst.
 
@@ -214,6 +217,9 @@ Requirements:
 - Prioritize remediation actions.
 - Be practical and readable for developers and a PFE supervisor.
 - Do not invent findings.
+- Do not mention compromise, exploitation, or critical severity unless explicitly present in the data.
+- If a count is zero, say it is zero.
+- If information is missing, say it is missing.
 
 Aggregated data:
 {json.dumps(summary, indent=2)}
@@ -226,25 +232,23 @@ Priority actions:
 """
 
     try:
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-            },
-            timeout=120,
+        client = Groq(api_key=api_key)
+        chat_completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a precise DevSecOps security analyst. Only use the provided data."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
         )
-        response.raise_for_status()
-        data = response.json()
-        return data.get("response", "").strip()
+        return (chat_completion.choices[0].message.content or "").strip()
     except Exception as e:
-        return f"## Ollama analysis unavailable\n\nError while generating local LLM summary: {str(e)}"
+        return f"## Groq analysis unavailable\n\nError while generating Groq summary: {str(e)}"
 
 
 def write_outputs(summary, status, reason, actions, llm_analysis):
     has_real_llm_output = (
-        llm_analysis is not None and "Ollama analysis unavailable" not in llm_analysis
+        llm_analysis is not None and "Groq analysis unavailable" not in llm_analysis
     )
 
     decision = {
@@ -253,8 +257,8 @@ def write_outputs(summary, status, reason, actions, llm_analysis):
         "summary": summary,
         "priority_actions": actions,
         "llm_enabled": has_real_llm_output,
-        "llm_provider": "ollama",
-        "llm_model": OLLAMA_MODEL,
+        "llm_provider": "groq",
+        "llm_model": GROQ_MODEL,
     }
 
     with open("ai-decision.json", "w", encoding="utf-8") as f:
@@ -294,7 +298,7 @@ def write_outputs(summary, status, reason, actions, llm_analysis):
     lines.append("")
 
     if llm_analysis:
-        lines.append("## Ollama-based security analysis")
+        lines.append("## Groq-based security analysis")
         lines.append("")
         lines.append(llm_analysis)
         lines.append("")
@@ -317,11 +321,14 @@ def main():
 
     status, reason = decide_status(summary)
     actions = build_priority_actions(summary, status)
-    llm_analysis = generate_ollama_analysis(summary, status, reason, actions)
+    llm_analysis = generate_groq_analysis(summary, status, reason, actions)
     write_outputs(summary, status, reason, actions, llm_analysis)
 
     print("AI security agent completed.")
     print(json.dumps({"status": status, "reason": reason}, indent=2))
+
+    if status == "BLOCKED":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
