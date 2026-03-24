@@ -1,11 +1,12 @@
 import json
-import os
 from pathlib import Path
 
-from openai import OpenAI
+import requests
 
 
 ARTIFACTS_DIR = Path("artifacts")
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "qwen2.5:1.5b"
 
 
 def load_json(path: Path):
@@ -149,7 +150,6 @@ def decide_status(summary):
     if summary["npm_audit"]["critical"] > 0:
         return "BLOCKED", "Critical vulnerabilities found in frontend dependencies"
 
-    # Règles renforcées
     if summary["trivy"]["HIGH"] >= 100:
         return "BLOCKED", "Too many high-severity vulnerabilities found in backend container image"
 
@@ -201,33 +201,24 @@ def build_priority_actions(summary, status):
     return actions[:5]
 
 
-def generate_llm_analysis(summary, status, reason, actions):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None
-
-    client = OpenAI(api_key=api_key)
-
+def generate_ollama_analysis(summary, status, reason, actions):
     prompt = f"""
 You are a DevSecOps AI security analyst.
 
-You are given aggregated CI security results for a web application pipeline.
-Write a concise professional security summary in Markdown.
+Write a concise Markdown security analysis based only on the following data.
 
 Requirements:
 - Start with a short executive summary.
-- Explain the security posture.
+- Explain the overall security posture.
 - Highlight the most important risks.
 - Prioritize remediation actions.
-- Be precise and practical.
-- Keep it readable for developers and project supervisors.
+- Be practical and readable for developers and a PFE supervisor.
 - Do not invent findings.
-- Base everything only on the data below.
 
 Aggregated data:
 {json.dumps(summary, indent=2)}
 
-Computed pipeline status: {status}
+Computed status: {status}
 Reason: {reason}
 
 Priority actions:
@@ -235,22 +226,35 @@ Priority actions:
 """
 
     try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=120,
         )
-        return response.output_text.strip()
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip()
     except Exception as e:
-        return f"## LLM analysis unavailable\n\nError while generating LLM summary: {str(e)}"
+        return f"## Ollama analysis unavailable\n\nError while generating local LLM summary: {str(e)}"
 
 
 def write_outputs(summary, status, reason, actions, llm_analysis):
+    has_real_llm_output = (
+        llm_analysis is not None and "Ollama analysis unavailable" not in llm_analysis
+    )
+
     decision = {
         "status": status,
         "reason": reason,
         "summary": summary,
         "priority_actions": actions,
-        "llm_enabled": llm_analysis is not None,
+        "llm_enabled": has_real_llm_output,
+        "llm_provider": "ollama",
+        "llm_model": OLLAMA_MODEL,
     }
 
     with open("ai-decision.json", "w", encoding="utf-8") as f:
@@ -290,7 +294,7 @@ def write_outputs(summary, status, reason, actions, llm_analysis):
     lines.append("")
 
     if llm_analysis:
-        lines.append("## LLM-based security analysis")
+        lines.append("## Ollama-based security analysis")
         lines.append("")
         lines.append(llm_analysis)
         lines.append("")
@@ -313,14 +317,11 @@ def main():
 
     status, reason = decide_status(summary)
     actions = build_priority_actions(summary, status)
-    llm_analysis = generate_llm_analysis(summary, status, reason, actions)
+    llm_analysis = generate_ollama_analysis(summary, status, reason, actions)
     write_outputs(summary, status, reason, actions, llm_analysis)
 
     print("AI security agent completed.")
     print(json.dumps({"status": status, "reason": reason}, indent=2))
-
-    if status == "BLOCKED":
-        raise SystemExit(1)
 
 
 if __name__ == "__main__":

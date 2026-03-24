@@ -325,7 +325,7 @@ jobs:
         run: docker compose down -v
   # 12) AI security agent = final decision maker
   ai-security-agent:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ollama]
     needs:
       - secrets-scan
       - sast-semgrep
@@ -346,7 +346,9 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install openai
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install requests
 
       - name: Download all scan artifacts
         uses: actions/download-artifact@v4
@@ -359,10 +361,9 @@ jobs:
           find artifacts -maxdepth 3 -type f | sort || true
 
       - name: Run AI security agent
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python scripts/ai_security_agent.py
+          . .venv/bin/activate
+          python3 scripts/ai_security_agent.py
 
       - name: Publish AI summary to GitHub Actions
         if: always()
@@ -378,9 +379,9 @@ jobs:
             ai-security-summary.md
             ai-decision.json
           if-no-files-found: warn
-  # 12) AI Remediation agent
+  # 13) AI Remediation agent
   ai-remediation-agent:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ollama]
     needs:
       - ai-security-agent
     if: always()
@@ -394,7 +395,9 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install openai
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install requests
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -407,10 +410,9 @@ jobs:
           find artifacts -maxdepth 3 -type f | sort || true
 
       - name: Run AI remediation agent
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python scripts/ai_remediation_agent.py
+          . .venv/bin/activate
+          python3 scripts/ai_remediation_agent.py
 
       - name: Publish remediation summary
         if: always()
