@@ -1,11 +1,12 @@
 import json
-import os
 from pathlib import Path
 
-from openai import OpenAI
+import requests
 
 
 ARTIFACTS_DIR = Path("artifacts")
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_MODEL = "qwen2.5:1.5b"
 
 
 def load_json(path: Path):
@@ -52,20 +53,11 @@ def build_remediation_data():
     }
 
 
-def generate_llm_remediation(remediation_data):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return (
-            "# AI Remediation Plan\n\n"
-            "LLM remediation unavailable because OPENAI_API_KEY is not configured.\n"
-        )
-
-    client = OpenAI(api_key=api_key)
-
+def generate_ollama_remediation(remediation_data):
     prompt = f"""
 You are a DevSecOps remediation advisor.
 
-Your job is to analyze the security decision and scan outputs below and produce
+Analyze the security decision and scan outputs below and produce
 a practical remediation plan in Markdown.
 
 Requirements:
@@ -83,15 +75,22 @@ Data:
 """
 
     try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=180,
         )
-        return response.output_text.strip()
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip()
     except Exception as e:
         return (
             "# AI Remediation Plan\n\n"
-            f"LLM remediation unavailable.\n\nError: {str(e)}\n"
+            f"Ollama remediation unavailable.\n\nError: {str(e)}\n"
         )
 
 
@@ -100,11 +99,18 @@ def build_structured_plan(remediation_data, remediation_markdown):
     status = ai_decision.get("status", "UNKNOWN")
     reason = ai_decision.get("reason", "No reason available")
 
+    has_real_llm_output = (
+        remediation_markdown is not None
+        and "Ollama remediation unavailable" not in remediation_markdown
+    )
+
     structured = {
         "status": status,
         "reason": reason,
         "generated_by": "ai-remediation-agent",
-        "has_llm_output": remediation_markdown is not None,
+        "has_llm_output": has_real_llm_output,
+        "llm_provider": "ollama",
+        "llm_model": OLLAMA_MODEL,
     }
 
     with open("remediation-plan.json", "w", encoding="utf-8") as f:
@@ -116,7 +122,7 @@ def build_structured_plan(remediation_data, remediation_markdown):
 
 def main():
     remediation_data = build_remediation_data()
-    remediation_markdown = generate_llm_remediation(remediation_data)
+    remediation_markdown = generate_ollama_remediation(remediation_data)
     build_structured_plan(remediation_data, remediation_markdown)
     print("AI remediation agent completed.")
 
