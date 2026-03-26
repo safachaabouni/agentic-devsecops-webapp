@@ -190,30 +190,46 @@ jobs:
 
   # 8) Container security scan (Trivy)
   container-scan-backend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: Build backend image
-        run: docker build -f backend/Dockerfile -t backend:ci .
+    - name: Build backend image
+      run: docker build -f backend/Dockerfile -t backend:ci .
 
-      - name: Trivy scan (backend image) - export JSON report
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: backend:ci
-          format: json
-          output: trivy-report.json
-          severity: "CRITICAL,HIGH"
-          exit-code: "0"
+    - name: Trivy scan (backend image) - export JSON report
+      uses: aquasecurity/trivy-action@v0.35.0
+      with:
+        image-ref: backend:ci
+        format: json
+        output: trivy-report.json
+        exit-code: "0"
+        severity: "CRITICAL,HIGH"
 
-      - name: Upload Trivy artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-report
-          path: trivy-report.json
-          if-no-files-found: warn
+    - name: Verify trivy report
+      if: always()
+      run: |
+        ls -l
+        test -f trivy-report.json && echo "trivy-report.json found"
 
+    - name: Upload Trivy artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trivy-report
+        path: trivy-report.json
+        if-no-files-found: warn
+
+    - name: Fail if Trivy found HIGH or CRITICAL vulnerabilities
+      if: always()
+      run: |
+        if [ -f trivy-report.json ]; then
+          COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length' trivy-report.json)
+          echo "Trivy found $COUNT HIGH/CRITICAL vulnerability(ies)"
+          if [ "$COUNT" -gt 0 ]; then
+            exit 1
+          fi
+        fi
   # 9) IaC scan
   iac-scan-checkov:
     runs-on: ubuntu-latest
