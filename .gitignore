@@ -5,3 +5,56 @@ node_modules/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+backend/.venv/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# Generated AI outputs
+ai-decision.json
+ai-security-summary.md
+remediation-plan.json
+remediation-plan.md
+
+# Downloaded artifacts / temporary files
+artifacts/
+downloads/
+tmp/
+temp/
+
+# Security reports generated locally
+gitleaks-report.json
+semgrep-report.json
+pip-audit-report.json
+npm-audit-report.json
+trivy-report.json
+checkov-report.sarif
+zap_report.json
+sbom.cyclonedx.json
+
+# Logs
+*.log
