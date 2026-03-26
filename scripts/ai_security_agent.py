@@ -59,21 +59,38 @@ def count_pip_audit():
 def count_npm_audit():
     path = find_first_file("npm-audit-report.json")
     data = load_json(path) if path else None
+
+    result = {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0, "total": 0}
+
     if not isinstance(data, dict):
-        return {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0, "total": 0}
+        return result
 
+    # Format 1 : metadata.vulnerabilities
     metadata = data.get("metadata", {})
-    vulns = metadata.get("vulnerabilities", {})
-    result = {
-        "info": vulns.get("info", 0),
-        "low": vulns.get("low", 0),
-        "moderate": vulns.get("moderate", 0),
-        "high": vulns.get("high", 0),
-        "critical": vulns.get("critical", 0),
-    }
-    result["total"] = sum(result.values())
-    return result
+    if isinstance(metadata, dict) and isinstance(metadata.get("vulnerabilities"), dict):
+        vulns = metadata["vulnerabilities"]
+        result["info"] = vulns.get("info", 0)
+        result["low"] = vulns.get("low", 0)
+        result["moderate"] = vulns.get("moderate", 0)
+        result["high"] = vulns.get("high", 0)
+        result["critical"] = vulns.get("critical", 0)
+        result["total"] = sum(result.values())
+        return result
 
+    # Format 2 : vulnerabilities à la racine, par package
+    vulns = data.get("vulnerabilities", {})
+    if isinstance(vulns, dict):
+        for _, vuln in vulns.items():
+            sev = str(vuln.get("severity", "")).lower()
+            if sev in result:
+                result[sev] += 1
+
+        result["total"] = sum(
+            result[k] for k in ["info", "low", "moderate", "high", "critical"]
+        )
+        return result
+
+    return result
 
 def count_trivy():
     path = find_first_file("trivy-report.json")
