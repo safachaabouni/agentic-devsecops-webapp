@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-AI Auto-Fix Suggestion Agent
+AI Auto-Fix Suggestion Agent - V2
 
-Inputs (expected in artifacts/):
+Inputs expected under artifacts/:
 - ai-decision.json
 - remediation-plan.json
 - semgrep-report.json
@@ -10,14 +10,14 @@ Inputs (expected in artifacts/):
 - npm-audit-report.json
 - trivy-report.json
 - checkov-report.sarif
-- optionally others
+- optionally zap_report.json
 
 Outputs:
 - fix-suggestions.json
 - fix-suggestions.md
 
-Environment:
-- GROQ_API_KEY (optional but recommended)
+Env:
+- GROQ_API_KEY (optional)
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import os
 import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 try:
     from groq import Groq
@@ -45,15 +45,18 @@ MAX_ITEMS_FOR_LLM = 12
 @dataclass
 class FixItem:
     priority: str
+    category: str
     source_tool: str
     issue: str
     target: str
     suggested_fix: str
+    fix_command: str
     rationale: str
-    confidence: str
+    confidence: float
     auto_applicable: bool
-    requires_human_review: bool = True
-    references: Optional[List[str]] = None
+    requires_human_review: bool
+    estimated_effort: str
+    risk_if_not_fixed: str
 
 
 def find_file(filename: str, base_dir: Path = ARTIFACTS_DIR) -> Optional[Path]:
@@ -70,8 +73,13 @@ def safe_read_json(path: Optional[Path]) -> Any:
         return None
 
 
+def truncate(text: str, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def severity_rank(sev: str) -> int:
-    order = {
+    mapping = {
         "CRITICAL": 5,
         "HIGH": 4,
         "MEDIUM": 3,
@@ -79,22 +87,34 @@ def severity_rank(sev: str) -> int:
         "LOW": 2,
         "INFO": 1,
         "UNKNOWN": 0,
+        "ERROR": 4,
+        "WARNING": 3,
     }
-    return order.get((sev or "").upper(), 0)
+    return mapping.get((sev or "").upper(), 0)
 
 
 def normalize_priority(sev: str) -> str:
     sev = (sev or "").upper()
-    if sev in {"CRITICAL", "HIGH"}:
+    if sev == "CRITICAL":
+        return "CRITICAL"
+    if sev == "HIGH":
         return "HIGH"
-    if sev in {"MEDIUM", "MODERATE"}:
+    if sev in {"MEDIUM", "MODERATE", "WARNING"}:
         return "MEDIUM"
     return "LOW"
 
 
-def truncate(text: str, limit: int = 300) -> str:
-    text = re.sub(r"\s+", " ", text or "").strip()
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+def load_context() -> Dict[str, Any]:
+    return {
+        "ai_decision": safe_read_json(find_file("ai-decision.json")),
+        "remediation_plan": safe_read_json(find_file("remediation-plan.json")),
+        "semgrep": safe_read_json(find_file("semgrep-report.json")),
+        "pip_audit": safe_read_json(find_file("pip-audit-report.json")),
+        "npm_audit": safe_read_json(find_file("npm-audit-report.json")),
+        "trivy": safe_read_json(find_file("trivy-report.json")),
+        "checkov": safe_read_json(find_file("checkov-report.sarif")),
+        "zap": safe_read_json(find_file("zap_report.json")),
+    }
 
 
 def extract_semgrep(report: Any) -> List[Dict[str, Any]]:
@@ -103,15 +123,16 @@ def extract_semgrep(report: Any) -> List[Dict[str, Any]]:
         return findings
 
     for result in report.get("results", []):
-        severity = result.get("extra", {}).get("severity", "MEDIUM")
+        extra = result.get("extra", {})
+        severity = extra.get("severity", "MEDIUM")
         path = result.get("path", "unknown")
         rule_id = result.get("check_id", "unknown-rule")
-        message = result.get("extra", {}).get("message", "Semgrep finding")
+        message = extra.get("message", "Semgrep finding")
 
         findings.append(
             {
                 "tool": "semgrep",
-                "severity": severity.upper(),
+                "severity": str(severity).upper(),
                 "issue": f"{rule_id}: {message}",
                 "target": path,
                 "metadata": {
@@ -134,23 +155,23 @@ def extract_pip_audit(report: Any) -> List[Dict[str, Any]]:
         version = dep.get("version", "unknown")
         vulns = dep.get("vulns", []) or []
         for vuln in vulns:
-            fix_versions = vuln.get("fix_versions") or []
             vuln_id = vuln.get("id", "unknown-vuln")
             desc = vuln.get("description", "")
-            target_fix = fix_versions[0] if fix_versions else None
+            fix_versions = vuln.get("fix_versions") or []
+            recommended = fix_versions[0] if fix_versions else ""
 
             findings.append(
                 {
                     "tool": "pip-audit",
                     "severity": "HIGH",
                     "issue": f"{package} {version} affected by {vuln_id}",
-                    "target": "backend/pyproject.toml or uv.lock",
+                    "target": "backend/pyproject.toml",
                     "metadata": {
                         "package": package,
                         "installed_version": version,
                         "vuln_id": vuln_id,
-                        "description": truncate(desc, 200),
-                        "recommended_version": target_fix,
+                        "description": truncate(desc, 180),
+                        "recommended_version": recommended,
                     },
                 }
             )
@@ -164,26 +185,29 @@ def extract_npm_audit(report: Any) -> List[Dict[str, Any]]:
 
     vulnerabilities = report.get("vulnerabilities", {}) or {}
     for pkg_name, data in vulnerabilities.items():
-        severity = (data.get("severity") or "medium").upper()
+        severity = str(data.get("severity", "medium")).upper()
         via = data.get("via", [])
-        fix_available = data.get("fixAvailable")
-        issue_list = []
+        issue_parts = []
 
         for item in via:
             if isinstance(item, dict):
-                issue_list.append(item.get("title") or item.get("source") or "advisory")
+                title = item.get("title") or item.get("name") or item.get("source")
+                if title:
+                    issue_parts.append(str(title))
             else:
-                issue_list.append(str(item))
+                issue_parts.append(str(item))
+
+        issue_text = "; ".join(issue_parts[:3]) if issue_parts else "Frontend dependency vulnerability"
 
         findings.append(
             {
                 "tool": "npm-audit",
                 "severity": severity,
-                "issue": f"{pkg_name}: {'; '.join(issue_list[:3]) or 'Frontend vulnerability'}",
-                "target": "frontend/package.json or package-lock.json",
+                "issue": f"{pkg_name}: {issue_text}",
+                "target": "frontend/package.json",
                 "metadata": {
                     "package": pkg_name,
-                    "fix_available": fix_available,
+                    "fix_available": data.get("fixAvailable"),
                     "range": data.get("range"),
                 },
             }
@@ -197,21 +221,22 @@ def extract_trivy(report: Any) -> List[Dict[str, Any]]:
         return findings
 
     for result in report.get("Results", []) or []:
-        target = result.get("Target", "container-image")
-        vulnerabilities = result.get("Vulnerabilities", []) or []
-        for vuln in vulnerabilities:
-            severity = (vuln.get("Severity") or "UNKNOWN").upper()
+        target = result.get("Target", "backend:ci")
+        vulns = result.get("Vulnerabilities", []) or []
+        for vuln in vulns:
+            severity = str(vuln.get("Severity", "UNKNOWN")).upper()
             findings.append(
                 {
                     "tool": "trivy",
                     "severity": severity,
                     "issue": f"{vuln.get('PkgName', 'package')} affected by {vuln.get('VulnerabilityID', 'unknown')}",
-                    "target": target,
+                    "target": "backend/Dockerfile",
                     "metadata": {
                         "package": vuln.get("PkgName"),
                         "installed_version": vuln.get("InstalledVersion"),
                         "fixed_version": vuln.get("FixedVersion"),
                         "title": vuln.get("Title"),
+                        "image_target": target,
                     },
                 }
             )
@@ -223,27 +248,26 @@ def extract_checkov(report: Any) -> List[Dict[str, Any]]:
     if not isinstance(report, dict):
         return findings
 
-    runs = report.get("runs", []) or []
-    for run in runs:
+    for run in report.get("runs", []) or []:
         for result in run.get("results", []) or []:
-            level = (result.get("level") or "warning").upper()
-            severity = "HIGH" if level in {"ERROR"} else "MEDIUM"
+            level = str(result.get("level", "warning")).upper()
+            severity = "HIGH" if level == "ERROR" else "MEDIUM"
+
             rule_id = result.get("ruleId", "unknown-check")
-            message = ""
-            if result.get("message"):
-                message = result["message"].get("text", "")
+            msg = result.get("message", {}).get("text", "IaC / workflow misconfiguration")
+
+            target = ".github/workflows/ci.yml"
             locations = result.get("locations", []) or []
-            target = "unknown"
             if locations:
                 phys = locations[0].get("physicalLocation", {})
                 artifact = phys.get("artifactLocation", {})
-                target = artifact.get("uri", "unknown")
+                target = artifact.get("uri", target)
 
             findings.append(
                 {
                     "tool": "checkov",
                     "severity": severity,
-                    "issue": f"{rule_id}: {message or 'IaC / workflow misconfiguration'}",
+                    "issue": f"{rule_id}: {msg}",
                     "target": target,
                     "metadata": {"rule_id": rule_id},
                 }
@@ -251,16 +275,33 @@ def extract_checkov(report: Any) -> List[Dict[str, Any]]:
     return findings
 
 
-def load_context() -> Dict[str, Any]:
-    return {
-        "ai_decision": safe_read_json(find_file("ai-decision.json")),
-        "remediation_plan": safe_read_json(find_file("remediation-plan.json")),
-        "semgrep": safe_read_json(find_file("semgrep-report.json")),
-        "pip_audit": safe_read_json(find_file("pip-audit-report.json")),
-        "npm_audit": safe_read_json(find_file("npm-audit-report.json")),
-        "trivy": safe_read_json(find_file("trivy-report.json")),
-        "checkov": safe_read_json(find_file("checkov-report.sarif")),
-    }
+def extract_zap(report: Any) -> List[Dict[str, Any]]:
+    findings = []
+    if not isinstance(report, dict):
+        return findings
+
+    site = report.get("site", [])
+    if not isinstance(site, list):
+        return findings
+
+    for entry in site:
+        alerts = entry.get("alerts", []) or []
+        for alert in alerts:
+            risk = str(alert.get("riskdesc", "Medium")).upper()
+            severity = "HIGH" if "HIGH" in risk else "MEDIUM" if "MEDIUM" in risk else "LOW"
+            findings.append(
+                {
+                    "tool": "zap",
+                    "severity": severity,
+                    "issue": f"{alert.get('name', 'ZAP alert')}: {truncate(alert.get('desc', ''), 120)}",
+                    "target": "backend/app",
+                    "metadata": {
+                        "solution": truncate(alert.get("solution", ""), 180),
+                        "riskdesc": risk,
+                    },
+                }
+            )
+    return findings
 
 
 def collect_fixable_findings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -270,6 +311,7 @@ def collect_fixable_findings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     findings.extend(extract_npm_audit(ctx["npm_audit"]))
     findings.extend(extract_trivy(ctx["trivy"]))
     findings.extend(extract_checkov(ctx["checkov"]))
+    findings.extend(extract_zap(ctx["zap"]))
 
     findings.sort(key=lambda x: severity_rank(x["severity"]), reverse=True)
     return findings[:MAX_ITEMS_FOR_LLM]
@@ -277,65 +319,110 @@ def collect_fixable_findings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def heuristic_fix(finding: Dict[str, Any]) -> FixItem:
     tool = finding["tool"]
-    sev = finding["severity"]
-    priority = normalize_priority(sev)
-    issue = finding["issue"]
+    severity = finding["severity"]
+    priority = normalize_priority(severity)
+    issue = truncate(finding["issue"])
     target = finding["target"]
-    metadata = finding.get("metadata", {}) or {}
+    md = finding.get("metadata", {}) or {}
 
-    if tool == "pip-audit":
-        package = metadata.get("package", "dependency")
-        recommended_version = metadata.get("recommended_version")
-        suggested = (
-            f"Update Python dependency '{package}' to a non-vulnerable version"
-            + (f", preferably {recommended_version}" if recommended_version else "")
-            + ". Regenerate the lock file and rerun tests."
-        )
-        rationale = "Dependency vulnerabilities are usually remediated by upgrading to a fixed version."
+    if tool == "npm-audit":
+        pkg = md.get("package", "dependency")
+        fix = f"Update {pkg} to a safe version supported by the project."
+        cmd = f"cd frontend && npm install {pkg}@latest"
+        category = "dependency-upgrade"
+        rationale = "Known vulnerable frontend dependencies should be upgraded to patched versions."
+        effort = "low"
+        risk = "XSS / DoS / client-side compromise"
+        auto = False if priority == "CRITICAL" else True
+        review = True if priority in {"CRITICAL", "HIGH"} else False
+        conf = 0.90
 
-    elif tool == "npm-audit":
-        package = metadata.get("package", "dependency")
-        suggested = (
-            f"Upgrade frontend dependency '{package}' to a safe version. "
-            "Run npm audit fix when appropriate, then validate build and UI behavior."
-        )
-        rationale = "Frontend dependency issues are commonly resolved through controlled package upgrades."
+    elif tool == "pip-audit":
+        pkg = md.get("package", "dependency")
+        recommended = md.get("recommended_version")
+        if recommended:
+            fix = f"Upgrade {pkg} to version {recommended} or later."
+            cmd = f'cd backend && uv add "{pkg}>={recommended}"'
+        else:
+            fix = f"Upgrade {pkg} to a non-vulnerable version and regenerate the lock file."
+            cmd = f"cd backend && uv add {pkg}@latest"
+        category = "dependency-upgrade"
+        rationale = "Python dependency issues are usually mitigated by moving to a fixed release."
+        effort = "low"
+        risk = "backend compromise / vulnerable dependency exposure"
+        auto = False
+        review = True
+        conf = 0.88
 
     elif tool == "trivy":
-        pkg = metadata.get("package", "system package")
-        fixed = metadata.get("fixed_version")
-        suggested = (
-            f"Update the base image or install a patched version of '{pkg}'"
-            + (f" ({fixed})" if fixed else "")
-            + ". Also review Dockerfile hardening such as non-root execution and minimal packages."
+        pkg = md.get("package", "system package")
+        fixed = md.get("fixed_version")
+        if fixed:
+            fix = f"Update OS package {pkg} to version {fixed} or use a newer patched base image."
+        else:
+            fix = f"Update OS package {pkg} and consider moving to a newer minimal base image."
+        cmd = (
+            "Review backend/Dockerfile, update the base image, then rebuild the image. "
+            f"If package-level upgrade is used: apt-get update && apt-get install --only-upgrade {pkg} -y"
         )
-        rationale = "Container vulnerabilities often come from outdated OS packages or an overly broad base image."
+        category = "container-hardening"
+        rationale = "Container scan findings often come from outdated base images or vulnerable system packages."
+        effort = "medium"
+        risk = "container compromise / remote code execution"
+        auto = False
+        review = True
+        conf = 0.90
 
     elif tool == "checkov":
-        suggested = (
-            "Harden the GitHub Actions workflow: apply least privilege permissions, pin actions to safe versions, "
-            "and avoid risky defaults. Review the flagged workflow section and update the YAML accordingly."
-        )
-        rationale = "IaC and workflow findings often require configuration hardening rather than code changes."
+        rule_id = md.get("rule_id", "workflow-check")
+        fix = "Harden the workflow configuration using least privilege, pinned actions, and safer defaults."
+        cmd = "Edit .github/workflows/ci.yml and reduce permissions or pin actions as required."
+        category = "workflow-hardening"
+        rationale = f"The flagged workflow rule {rule_id} indicates a CI/CD security misconfiguration."
+        effort = "medium"
+        risk = "pipeline misuse / supply-chain risk"
+        auto = False
+        review = True
+        conf = 0.86
 
-    else:  # semgrep and fallback
-        suggested = (
-            "Review the flagged code path, validate inputs, avoid insecure patterns, and refactor the implementation "
-            "according to secure coding practices. Add a regression test for the corrected behavior."
-        )
-        rationale = "Static analysis findings usually require a code-level patch and a validation test."
+    elif tool == "zap":
+        solution = md.get("solution") or "Add defensive controls at the API layer and retest the endpoint."
+        fix = solution
+        cmd = "Review the affected backend endpoint, harden validation / headers / auth logic, then rerun ZAP."
+        category = "api-hardening"
+        rationale = "DAST findings indicate weaknesses visible from outside the application."
+        effort = "medium"
+        risk = "web exploitation / exposed attack surface"
+        auto = False
+        review = True
+        conf = 0.82
+
+    else:  # semgrep
+        rule_id = md.get("rule_id", "secure-coding-rule")
+        fix = "Refactor the flagged code path to remove the insecure pattern and add a regression test."
+        cmd = f"Edit {target}, fix the insecure pattern related to {rule_id}, then run backend/frontend tests."
+        category = "code-fix"
+        rationale = "SAST findings usually require targeted source-code remediation."
+        effort = "medium"
+        risk = "insecure code path exploitable at runtime"
+        auto = False
+        review = True
+        conf = 0.84
 
     return FixItem(
         priority=priority,
+        category=category,
         source_tool=tool,
-        issue=truncate(issue, 220),
+        issue=issue,
         target=target,
-        suggested_fix=suggested,
+        suggested_fix=fix,
+        fix_command=cmd,
         rationale=rationale,
-        confidence="medium",
-        auto_applicable=tool in {"pip-audit", "npm-audit", "checkov"},
-        requires_human_review=True,
-        references=[tool],
+        confidence=conf,
+        auto_applicable=auto,
+        requires_human_review=review,
+        estimated_effort=effort,
+        risk_if_not_fixed=risk,
     )
 
 
@@ -343,38 +430,45 @@ def build_llm_prompt(ai_decision: Any, remediation_plan: Any, findings: List[Dic
     return f"""
 You are an AI Auto-Fix Suggestion Agent for a DevSecOps pipeline.
 
-Your task:
-Generate concrete, safe, developer-friendly fix suggestions from the security findings below.
+Return ONLY valid JSON with this structure:
+{{
+  "status": "SUGGESTIONS_GENERATED",
+  "upstream_security_status": "SAFE|WARNING|BLOCKED|UNKNOWN",
+  "summary": "short summary",
+  "items": [
+    {{
+      "priority": "CRITICAL|HIGH|MEDIUM|LOW",
+      "category": "dependency-upgrade|container-hardening|workflow-hardening|code-fix|api-hardening",
+      "source_tool": "tool name",
+      "issue": "issue description",
+      "target": "precise file target",
+      "suggested_fix": "human-readable fix",
+      "fix_command": "command or file-edit action",
+      "rationale": "why this fix is appropriate",
+      "confidence": 0.0,
+      "auto_applicable": false,
+      "requires_human_review": true,
+      "estimated_effort": "low|medium|high",
+      "risk_if_not_fixed": "brief risk"
+    }}
+  ]
+}}
 
 Rules:
-- Return ONLY valid JSON.
-- Output must be an object with keys:
-  - status
-  - summary
-  - items
-- items must be a list of objects with:
-  - priority
-  - source_tool
-  - issue
-  - target
-  - suggested_fix
-  - rationale
-  - confidence
-  - auto_applicable
-  - requires_human_review
-- Do NOT suggest disabling security tools just to pass CI.
-- Prefer safe upgrades, secure configuration hardening, validation improvements, and Docker/workflow hardening.
+- Do not use BLOCKED as the status of this agent.
+- Put the security agent decision into upstream_security_status.
+- Do not suggest disabling security tools to pass CI.
+- Prefer precise file targets.
+- Prefer safe upgrades and secure hardening.
 - Keep suggestions concise and actionable.
-- Mark auto_applicable=true only for low-risk changes such as dependency updates or simple workflow hardening.
-- If unsure, set requires_human_review=true.
 
-Global security decision:
+AI decision:
 {json.dumps(ai_decision, ensure_ascii=False, indent=2)}
 
 Remediation plan:
 {json.dumps(remediation_plan, ensure_ascii=False, indent=2)}
 
-Top fixable findings:
+Findings:
 {json.dumps(findings, ensure_ascii=False, indent=2)}
 """.strip()
 
@@ -394,53 +488,57 @@ def generate_with_groq(ai_decision: Any, remediation_plan: Any, findings: List[D
             messages=[
                 {
                     "role": "system",
-                    "content": "You generate secure, structured auto-fix suggestions for DevSecOps pipelines.",
+                    "content": "You generate structured, safe, actionable auto-fix suggestions for DevSecOps pipelines.",
                 },
                 {"role": "user", "content": prompt},
             ],
         )
         content = response.choices[0].message.content.strip()
-
-        # remove markdown fences if present
         content = re.sub(r"^```json\s*", "", content)
         content = re.sub(r"^```\s*", "", content)
         content = re.sub(r"\s*```$", "", content)
-
         return json.loads(content)
     except Exception as exc:
         print(f"[WARN] Groq generation failed: {exc}")
         return None
 
 
-def generate_heuristic_output(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
-    items = [asdict(heuristic_fix(f)) for f in findings[:10]]
-    return {
-        "status": "SUGGESTIONS_GENERATED",
-        "summary": "Fallback heuristic suggestions were generated because LLM output was unavailable.",
-        "items": items,
-    }
-
-
-def normalize_output(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_output(raw: Dict[str, Any], upstream_status: str) -> Dict[str, Any]:
     items = []
     for item in raw.get("items", []) or []:
         items.append(
             {
                 "priority": item.get("priority", "MEDIUM"),
+                "category": item.get("category", "code-fix"),
                 "source_tool": item.get("source_tool", "unknown"),
-                "issue": truncate(item.get("issue", "Unknown issue"), 220),
+                "issue": truncate(item.get("issue", "Unknown issue")),
                 "target": item.get("target", "unknown"),
                 "suggested_fix": item.get("suggested_fix", "No suggestion generated."),
+                "fix_command": item.get("fix_command", "Manual review required."),
                 "rationale": item.get("rationale", "No rationale provided."),
-                "confidence": item.get("confidence", "medium"),
+                "confidence": float(item.get("confidence", 0.75)),
                 "auto_applicable": bool(item.get("auto_applicable", False)),
                 "requires_human_review": bool(item.get("requires_human_review", True)),
+                "estimated_effort": item.get("estimated_effort", "medium"),
+                "risk_if_not_fixed": item.get("risk_if_not_fixed", "security exposure"),
             }
         )
 
     return {
-        "status": raw.get("status", "SUGGESTIONS_GENERATED"),
+        "status": "SUGGESTIONS_GENERATED",
+        "upstream_security_status": raw.get("upstream_security_status", upstream_status or "UNKNOWN"),
         "summary": raw.get("summary", "Auto-fix suggestions generated."),
+        "items": items,
+    }
+
+
+def generate_heuristic_output(ai_decision: Any, findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    upstream_status = str((ai_decision or {}).get("status", "UNKNOWN"))
+    items = [asdict(heuristic_fix(f)) for f in findings[:10]]
+    return {
+        "status": "SUGGESTIONS_GENERATED",
+        "upstream_security_status": upstream_status,
+        "summary": "Auto-fix suggestions generated from security findings using fallback heuristics.",
         "items": items,
     }
 
@@ -451,6 +549,8 @@ def to_markdown(output: Dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"**Status:** {output.get('status', 'UNKNOWN')}")
     lines.append("")
+    lines.append(f"**Upstream security status:** {output.get('upstream_security_status', 'UNKNOWN')}")
+    lines.append("")
     lines.append(f"**Summary:** {output.get('summary', '')}")
     lines.append("")
 
@@ -459,50 +559,56 @@ def to_markdown(output: Dict[str, Any]) -> str:
         lines.append("No fix suggestions generated.")
         return "\n".join(lines)
 
-    for idx, item in enumerate(items, start=1):
-        lines.append(f"## {idx}. {item['issue']}")
+    for i, item in enumerate(items, start=1):
+        lines.append(f"## {i}. {item['issue']}")
         lines.append("")
         lines.append(f"- **Priority:** {item['priority']}")
+        lines.append(f"- **Category:** {item['category']}")
         lines.append(f"- **Source tool:** {item['source_tool']}")
         lines.append(f"- **Target:** `{item['target']}`")
         lines.append(f"- **Suggested fix:** {item['suggested_fix']}")
+        lines.append(f"- **Fix command / action:** `{item['fix_command']}`")
         lines.append(f"- **Rationale:** {item['rationale']}")
         lines.append(f"- **Confidence:** {item['confidence']}")
         lines.append(f"- **Auto applicable:** {item['auto_applicable']}")
         lines.append(f"- **Human review required:** {item['requires_human_review']}")
+        lines.append(f"- **Estimated effort:** {item['estimated_effort']}")
+        lines.append(f"- **Risk if not fixed:** {item['risk_if_not_fixed']}")
         lines.append("")
 
     return "\n".join(lines)
 
 
 def main() -> int:
-    print("[INFO] Loading pipeline context...")
+    print("[INFO] Loading artifacts...")
     ctx = load_context()
 
     ai_decision = ctx["ai_decision"] or {}
     remediation_plan = ctx["remediation_plan"] or {}
 
     findings = collect_fixable_findings(ctx)
-    print(f"[INFO] Collected {len(findings)} fixable findings")
+    print(f"[INFO] Collected {len(findings)} actionable findings")
 
     if not findings:
         output = {
-            "status": "NO_FIXABLE_ITEMS",
+            "status": "SUGGESTIONS_GENERATED",
+            "upstream_security_status": str(ai_decision.get("status", "UNKNOWN")),
             "summary": "No actionable findings were identified from the available artifacts.",
             "items": [],
         }
     else:
         llm_output = generate_with_groq(ai_decision, remediation_plan, findings)
         if llm_output is None:
-            output = generate_heuristic_output(findings)
+            output = generate_heuristic_output(ai_decision, findings)
         else:
-            output = normalize_output(llm_output)
+            output = normalize_output(llm_output, str(ai_decision.get("status", "UNKNOWN")))
 
     OUTPUT_JSON.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     OUTPUT_MD.write_text(to_markdown(output), encoding="utf-8")
 
     print(f"[INFO] Wrote {OUTPUT_JSON}")
     print(f"[INFO] Wrote {OUTPUT_MD}")
+    print("[INFO] AI Auto-Fix Suggestion Agent completed.")
     return 0
 
 
