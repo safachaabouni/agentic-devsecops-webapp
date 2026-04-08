@@ -448,3 +448,54 @@ jobs:
             remediation-plan.md
             remediation-plan.json
           if-no-files-found: warn
+  # 13) AI autofix-agent
+  ai-autofix-agent:
+    runs-on: ubuntu-latest
+    needs:
+      - ai-remediation-agent
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          pip install groq
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Show downloaded artifacts
+        run: |
+          echo "Artifacts tree:"
+          find artifacts -maxdepth 3 -type f | sort || true
+
+      - name: Run AI Auto-Fix Suggestion Agent
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          . .venv/bin/activate
+          python3 scripts/ai_autofix_agent.py
+
+      - name: Publish auto-fix summary
+        if: always()
+        run: |
+          cat fix-suggestions.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload auto-fix outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-autofix-suggestions
+          path: |
+            fix-suggestions.md
+            fix-suggestions.json
+          if-no-files-found: warn
