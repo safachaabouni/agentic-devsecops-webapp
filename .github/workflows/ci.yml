@@ -466,6 +466,7 @@ jobs:
         run: |
           python3 -m venv .venv
           . .venv/bin/activate
+          pip install --upgrade pip
           pip install groq
 
       - name: Download all artifacts
@@ -485,10 +486,34 @@ jobs:
           . .venv/bin/activate
           python3 scripts/ai_autofix_agent.py
 
+      - name: Verify generated outputs
+        if: always()
+        run: |
+          echo "Generated files:"
+          ls -l fix-suggestions.json fix-suggestions.md 2>/dev/null || true
+
+          if [ -f fix-suggestions.json ]; then
+            echo "fix-suggestions.json found"
+          else
+            echo "fix-suggestions.json missing"
+          fi
+
+          if [ -f fix-suggestions.md ]; then
+            echo "fix-suggestions.md found"
+          else
+            echo "fix-suggestions.md missing"
+          fi
+
       - name: Publish auto-fix summary
         if: always()
         run: |
-          cat fix-suggestions.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f fix-suggestions.md ]; then
+            cat fix-suggestions.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## AI Auto-Fix Suggestions" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No markdown summary was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload auto-fix outputs
         if: always()
