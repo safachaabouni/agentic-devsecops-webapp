@@ -93,7 +93,7 @@ def mark_node(state: AgentState, name: str) -> None:
 
 def extract_security_status(decision: Optional[Dict[str, Any]]) -> str:
     """
-    Try several fields to stay compatible with your current and future JSON schemas.
+    Try several fields to stay compatible with current and future JSON schemas.
     """
     if not decision:
         return "UNKNOWN"
@@ -108,7 +108,12 @@ def extract_security_status(decision: Optional[Dict[str, Any]]) -> str:
     return "UNKNOWN"
 
 
-def run_python_script(script_path: Path, state: AgentState) -> None:
+def run_python_script(script_path: Path, state: AgentState) -> int:
+    """
+    Runs a Python script and returns its exit code.
+    The caller decides whether a non-zero exit code is a technical error
+    or a valid business outcome.
+    """
     if not script_path.exists():
         raise FileNotFoundError(f"Script not found: {script_path}")
 
@@ -129,19 +134,20 @@ def run_python_script(script_path: Path, state: AgentState) -> None:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"{script_path.name} failed with exit code {result.returncode}"
-        )
+    return result.returncode
 
 
 def security_node(state: AgentState) -> AgentState:
+    """
+    AI Security Agent may intentionally exit with code 1 when status=BLOCKED.
+    That must be treated as a valid security outcome, not necessarily a technical failure.
+    """
     node_name = "security"
     mark_node(state, node_name)
     append_message(state, "Running AI Security Agent")
 
     try:
-        run_python_script(SECURITY_SCRIPT, state)
+        return_code = run_python_script(SECURITY_SCRIPT, state)
         decision = safe_read_json(AI_DECISION_FILE)
 
         if decision is None:
@@ -153,6 +159,12 @@ def security_node(state: AgentState) -> AgentState:
 
         append_message(state, f"Security decision = {status}")
         print(f"[INFO] Security decision = {status}")
+
+        if return_code != 0:
+            append_message(
+                state,
+                f"AI Security Agent exited with code {return_code}, interpreted as workflow status {status}"
+            )
 
     except Exception as exc:
         append_error(state, f"Security node failed: {exc}")
@@ -168,7 +180,7 @@ def remediation_node(state: AgentState) -> AgentState:
     append_message(state, "Running AI Remediation Agent")
 
     try:
-        run_python_script(REMEDIATION_SCRIPT, state)
+        return_code = run_python_script(REMEDIATION_SCRIPT, state)
         remediation = safe_read_json(REMEDIATION_FILE)
 
         if remediation is None:
@@ -176,6 +188,12 @@ def remediation_node(state: AgentState) -> AgentState:
 
         state["remediation_plan"] = remediation
         append_message(state, "Remediation plan generated")
+
+        if return_code != 0:
+            append_message(
+                state,
+                f"AI Remediation Agent exited with code {return_code}"
+            )
 
     except Exception as exc:
         append_error(state, f"Remediation node failed: {exc}")
@@ -190,7 +208,7 @@ def autofix_node(state: AgentState) -> AgentState:
     append_message(state, "Running AI Auto-Fix Suggestion Agent")
 
     try:
-        run_python_script(AUTOFIX_SCRIPT, state)
+        return_code = run_python_script(AUTOFIX_SCRIPT, state)
         autofix = safe_read_json(AUTOFIX_FILE)
 
         if autofix is None:
@@ -198,6 +216,12 @@ def autofix_node(state: AgentState) -> AgentState:
 
         state["fix_suggestions"] = autofix
         append_message(state, "Auto-fix suggestions generated")
+
+        if return_code != 0:
+            append_message(
+                state,
+                f"AI Auto-Fix Suggestion Agent exited with code {return_code}"
+            )
 
     except Exception as exc:
         append_error(state, f"AutoFix node failed: {exc}")
@@ -210,8 +234,6 @@ def route_after_security(state: AgentState) -> str:
     status = state.get("workflow_status", "UNKNOWN").upper()
 
     if status == "SAFE":
-        # For V1, even SAFE can stop early.
-        # If later you want remediation even in SAFE, just return "remediation".
         append_message(state, "Routing decision: SAFE -> end")
         return "end"
 
@@ -250,7 +272,7 @@ def build_graph():
 def build_run_summary(final_state: AgentState) -> Dict[str, Any]:
     return {
         "agent_name": "LangGraph Orchestrator",
-        "agent_version": "1.0",
+        "agent_version": "2.0",
         "status": "SUCCESS" if not final_state.get("errors") else "PARTIAL_SUCCESS",
         "workflow_status": final_state.get("workflow_status", "UNKNOWN"),
         "summary": "LangGraph orchestration completed.",
@@ -294,19 +316,17 @@ def main() -> int:
         print("[INFO] Executed nodes:", final_state.get("executed_nodes", []))
         print("[INFO] Workflow status:", final_state.get("workflow_status", "UNKNOWN"))
 
-        # V1 policy:
-        # - We do NOT fail the orchestrator just because security is BLOCKED.
-        # - We fail only if there are real execution errors.
         if final_state.get("errors"):
-            print("[WARN] Orchestrator completed with errors", file=sys.stderr)
+            print("[WARN] Orchestrator completed with technical errors", file=sys.stderr)
             return 1
 
+        # SAFE / WARNING / BLOCKED are valid business statuses, not technical failures.
         return 0
 
     except Exception as exc:
         error_summary = {
             "agent_name": "LangGraph Orchestrator",
-            "agent_version": "1.0",
+            "agent_version": "2.0",
             "status": "FAILED",
             "workflow_status": "UNKNOWN",
             "summary": f"LangGraph orchestration failed: {exc}",
