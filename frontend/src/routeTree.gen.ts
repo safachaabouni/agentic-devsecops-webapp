@@ -13,6 +13,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as DevsecopsDashboardRouteImport } from './routes/devsecops-dashboard'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
@@ -37,6 +38,11 @@ const RecoverPasswordRoute = RecoverPasswordRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevsecopsDashboardRoute = DevsecopsDashboardRouteImport.update({
+  id: '/devsecops-dashboard',
+  path: '/devsecops-dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LayoutRoute = LayoutRouteImport.update({
@@ -65,6 +71,8 @@ const LayoutAdminRoute = LayoutAdminRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof LayoutIndexRoute
+  '/devsecops-dashboard': typeof DevsecopsDashboardRoute
   '/login': typeof LoginRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -72,9 +80,9 @@ export interface FileRoutesByFullPath {
   '/admin': typeof LayoutAdminRoute
   '/items': typeof LayoutItemsRoute
   '/settings': typeof LayoutSettingsRoute
-  '/': typeof LayoutIndexRoute
 }
 export interface FileRoutesByTo {
+  '/devsecops-dashboard': typeof DevsecopsDashboardRoute
   '/login': typeof LoginRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -87,6 +95,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_layout': typeof LayoutRouteWithChildren
+  '/devsecops-dashboard': typeof DevsecopsDashboardRoute
   '/login': typeof LoginRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -99,6 +108,8 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
+    | '/devsecops-dashboard'
     | '/login'
     | '/recover-password'
     | '/reset-password'
@@ -106,9 +117,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/items'
     | '/settings'
-    | '/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/devsecops-dashboard'
     | '/login'
     | '/recover-password'
     | '/reset-password'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_layout'
+    | '/devsecops-dashboard'
     | '/login'
     | '/recover-password'
     | '/reset-password'
@@ -132,6 +144,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   LayoutRoute: typeof LayoutRouteWithChildren
+  DevsecopsDashboardRoute: typeof DevsecopsDashboardRoute
   LoginRoute: typeof LoginRoute
   RecoverPasswordRoute: typeof RecoverPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
@@ -168,10 +181,17 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/devsecops-dashboard': {
+      id: '/devsecops-dashboard'
+      path: '/devsecops-dashboard'
+      fullPath: '/devsecops-dashboard'
+      preLoaderRoute: typeof DevsecopsDashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_layout': {
       id: '/_layout'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof LayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -225,6 +245,7 @@ const LayoutRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   LayoutRoute: LayoutRouteWithChildren,
+  DevsecopsDashboardRoute: DevsecopsDashboardRoute,
   LoginRoute: LoginRoute,
   RecoverPasswordRoute: RecoverPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
