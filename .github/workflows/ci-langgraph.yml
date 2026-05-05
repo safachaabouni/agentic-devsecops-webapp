@@ -391,6 +391,22 @@ jobs:
           echo "Generated files:"
           ls -l ai-decision.json remediation-plan.json fix-suggestions.json langgraph-run-summary.json 2>/dev/null || true
 
+      - name: Flatten downloaded artifacts
+        if: always()
+        run: |
+          find artifacts -type f | while read -r f; do
+            base="$(basename "$f")"
+            cp "$f" "./$base"
+          done
+
+          echo "Workspace files after flatten:"
+          ls -l *.json *.sarif 2>/dev/null || true
+
+      - name: Publish dashboard data
+        if: always()
+        run: |
+          bash scripts/publish_dashboard_data.sh
+
       - name: Publish LangGraph summary
         if: always()
         run: |
