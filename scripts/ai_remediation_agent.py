@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 from groq import Groq
@@ -95,6 +96,8 @@ a practical remediation plan in Markdown.
 Requirements:
 - Start with a short summary.
 - Explain the main blocking or warning causes.
+- Add a section titled exactly: "## Priority Remediation Actions"
+- Under that section, provide a concise numbered list of remediation actions.
 - Prioritize remediation actions from highest to lowest priority.
 - Be practical and specific.
 - Mention likely affected areas (backend image, frontend dependencies, workflow, etc.).
@@ -112,7 +115,10 @@ Data:
         chat_completion = client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": "You are a precise DevSecOps remediation advisor. Only use the provided data."},
+                {
+                    "role": "system",
+                    "content": "You are a precise DevSecOps remediation advisor. Only use the provided data.",
+                },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
@@ -125,15 +131,76 @@ Data:
         )
 
 
+def extract_priority_items_from_markdown(remediation_markdown: str):
+    if not remediation_markdown:
+        return []
+
+    lines = remediation_markdown.splitlines()
+    items = []
+    inside_priority_section = False
+
+    for raw_line in lines:
+        line = raw_line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("## "):
+            inside_priority_section = line.lower() == "## priority remediation actions"
+            continue
+
+        if inside_priority_section:
+            numbered = re.match(r"^\d+\.\s+(.*)", line)
+            bulleted = re.match(r"^[-*]\s+(.*)", line)
+
+            candidate = None
+            if numbered:
+                candidate = numbered.group(1).strip()
+            elif bulleted:
+                candidate = bulleted.group(1).strip()
+
+            if candidate:
+                items.append(candidate)
+
+    if items:
+        return items
+
+    fallback_items = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        numbered = re.match(r"^\d+\.\s+(.*)", line)
+        bulleted = re.match(r"^[-*]\s+(.*)", line)
+        if numbered:
+            fallback_items.append(numbered.group(1).strip())
+        elif bulleted:
+            fallback_items.append(bulleted.group(1).strip())
+
+    return fallback_items[:6]
+
+
 def build_structured_plan(remediation_data, remediation_markdown):
     ai_decision = remediation_data.get("ai_decision") or {}
-    status = ai_decision.get("status", "UNKNOWN")
-    reason = ai_decision.get("reason", "No reason available")
 
     has_real_llm_output = (
         remediation_markdown is not None
         and "Groq remediation unavailable" not in remediation_markdown
     )
+
+    priority_items = extract_priority_items_from_markdown(remediation_markdown)
+
+    if not priority_items:
+        priority_items = [
+            str(item).strip()
+            for item in (ai_decision.get("priority_actions") or [])
+            if str(item).strip()
+        ]
+
+    if priority_items:
+        status = "PLAN_GENERATED"
+        reason = "Remediation plan generated from blocking findings"
+    else:
+        status = "UNKNOWN"
+        reason = "No reason available"
 
     structured = {
         "status": status,
@@ -142,13 +209,16 @@ def build_structured_plan(remediation_data, remediation_markdown):
         "has_llm_output": has_real_llm_output,
         "llm_provider": "groq",
         "llm_model": GROQ_MODEL,
+        "priority_items": priority_items,
+        "source_security_status": ai_decision.get("status", "UNKNOWN"),
+        "source_security_reason": ai_decision.get("reason", ""),
     }
 
     with open("remediation-plan.json", "w", encoding="utf-8") as f:
         json.dump(structured, f, indent=2, ensure_ascii=False)
 
     with open("remediation-plan.md", "w", encoding="utf-8") as f:
-        f.write(remediation_markdown)
+        f.write(remediation_markdown or "# AI Remediation Plan\n\nNo remediation content generated.\n")
 
 
 def main():
