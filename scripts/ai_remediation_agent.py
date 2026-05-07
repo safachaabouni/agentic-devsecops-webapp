@@ -105,6 +105,7 @@ Requirements:
 - If some reports are missing, say so briefly.
 - Use only the information explicitly present below.
 - Do not mention packages, tools, incidents, or exploit scenarios that are not explicitly present in the input.
+- Do not use bold, markdown emphasis, or inline code inside remediation action items.
 
 Data:
 {json.dumps(remediation_data, indent=2)}
@@ -135,6 +136,15 @@ def extract_priority_items_from_markdown(remediation_markdown: str):
     if not remediation_markdown:
         return []
 
+    def clean_text(text: str) -> str:
+        cleaned = text.strip()
+        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", cleaned)
+        cleaned = re.sub(r"__(.*?)__", r"\1", cleaned)
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+        cleaned = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
     lines = remediation_markdown.splitlines()
     items = []
     inside_priority_section = False
@@ -160,7 +170,7 @@ def extract_priority_items_from_markdown(remediation_markdown: str):
                 candidate = bulleted.group(1).strip()
 
             if candidate:
-                items.append(candidate)
+                items.append(clean_text(candidate))
 
     if items:
         return items
@@ -170,10 +180,15 @@ def extract_priority_items_from_markdown(remediation_markdown: str):
         line = raw_line.strip()
         numbered = re.match(r"^\d+\.\s+(.*)", line)
         bulleted = re.match(r"^[-*]\s+(.*)", line)
+
+        candidate = None
         if numbered:
-            fallback_items.append(numbered.group(1).strip())
+            candidate = numbered.group(1).strip()
         elif bulleted:
-            fallback_items.append(bulleted.group(1).strip())
+            candidate = bulleted.group(1).strip()
+
+        if candidate:
+            fallback_items.append(clean_text(candidate))
 
     return fallback_items[:6]
 
@@ -202,6 +217,9 @@ def build_structured_plan(remediation_data, remediation_markdown):
         status = "UNKNOWN"
         reason = "No reason available"
 
+    source_security_status = str(ai_decision.get("status", "UNKNOWN"))
+    source_security_reason = str(ai_decision.get("reason", ""))
+
     structured = {
         "status": status,
         "reason": reason,
@@ -210,8 +228,8 @@ def build_structured_plan(remediation_data, remediation_markdown):
         "llm_provider": "groq",
         "llm_model": GROQ_MODEL,
         "priority_items": priority_items,
-        "source_security_status": ai_decision.get("status", "UNKNOWN"),
-        "source_security_reason": ai_decision.get("reason", ""),
+        "source_security_status": source_security_status,
+        "source_security_reason": source_security_reason,
     }
 
     with open("remediation-plan.json", "w", encoding="utf-8") as f:
