@@ -31,7 +31,7 @@ jobs:
 
       - name: Upload Gitleaks artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gitleaks-report
           path: gitleaks-report.json
@@ -57,7 +57,7 @@ jobs:
 
       - name: Upload Semgrep artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-report
           path: semgrep-report.json
@@ -154,7 +154,7 @@ jobs:
 
       - name: Upload pip-audit artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pip-audit-report
           path: pip-audit-report.json
@@ -182,7 +182,7 @@ jobs:
 
       - name: Upload npm audit artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-audit-report
           path: npm-audit-report.json
@@ -214,7 +214,7 @@ jobs:
 
       - name: Upload Trivy artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-report
           path: trivy-report.json
@@ -248,7 +248,7 @@ jobs:
 
       - name: Upload Checkov artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checkov-report
           path: checkov-report.sarif
@@ -267,7 +267,7 @@ jobs:
           output-file: sbom.cyclonedx.json
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-cyclonedx
           path: sbom.cyclonedx.json
@@ -328,7 +328,7 @@ jobs:
 
       - name: Upload ZAP artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zap-dast-report
           path: |
@@ -415,7 +415,7 @@ jobs:
 
       - name: Upload AI security outputs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ai-security-summary
           path: |
@@ -491,7 +491,7 @@ jobs:
 
       - name: Upload remediation outputs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ai-remediation-plan
           path: |
