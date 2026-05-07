@@ -161,6 +161,32 @@ function prettifyTimestamp(value?: string) {
   return value.replace("T", " ").slice(0, 16)
 }
 
+const PAGES_BASE_URL =
+  "https://safachaabouni.github.io/agentic-devsecops-webapp/latest"
+
+const artifactLinks = [
+  {
+    name: "ai-decision.json",
+    url: `${PAGES_BASE_URL}/ai-decision.json`,
+  },
+  {
+    name: "remediation-plan.json",
+    url: `${PAGES_BASE_URL}/remediation-plan.json`,
+  },
+  {
+    name: "fix-suggestions.json",
+    url: `${PAGES_BASE_URL}/fix-suggestions.json`,
+  },
+  {
+    name: "langgraph-run-summary.json",
+    url: `${PAGES_BASE_URL}/langgraph-run-summary.json`,
+  },
+  {
+    name: "fix-suggestions.md",
+    url: `${PAGES_BASE_URL}/fix-suggestions.md`,
+  },
+]
+
 export default function DevSecOpsDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -310,14 +336,6 @@ export default function DevSecOpsDashboard() {
 
   const remediationItems = remediationPlan?.priority_items || aiDecision?.priority_actions || []
   const fixSuggestions = fixSuggestionsFile?.items || []
-
-  const artifacts = [
-    "ai-decision.json",
-    "remediation-plan.json",
-    "fix-suggestions.json",
-    "langgraph-run-summary.json",
-    "fix-suggestions.md",
-  ]
 
   const pieData =
     overview.totalFindings > 0
@@ -750,12 +768,17 @@ export default function DevSecOpsDashboard() {
 
           <Card title="Artefacts générés">
             <div className="space-y-4">
-              {artifacts.map((artifact) => (
-                <div key={artifact} className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4">
-                  <span className="text-[16px] font-medium text-slate-900">{artifact}</span>
-                  <button className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100">
+              {artifactLinks.map((artifact) => (
+                <div key={artifact.name} className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4">
+                  <span className="text-[16px] font-medium text-slate-900">{artifact.name}</span>
+                  <a
+                    href={artifact.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
+                  >
                     View
-                  </button>
+                  </a>
                 </div>
               ))}
             </div>
