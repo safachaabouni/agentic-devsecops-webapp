@@ -165,26 +165,11 @@ const PAGES_BASE_URL =
   "https://safachaabouni.github.io/agentic-devsecops-webapp/latest"
 
 const artifactLinks = [
-  {
-    name: "ai-decision.json",
-    url: `${PAGES_BASE_URL}/ai-decision.json`,
-  },
-  {
-    name: "remediation-plan.json",
-    url: `${PAGES_BASE_URL}/remediation-plan.json`,
-  },
-  {
-    name: "fix-suggestions.json",
-    url: `${PAGES_BASE_URL}/fix-suggestions.json`,
-  },
-  {
-    name: "langgraph-run-summary.json",
-    url: `${PAGES_BASE_URL}/langgraph-run-summary.json`,
-  },
-  {
-    name: "fix-suggestions.md",
-    url: `${PAGES_BASE_URL}/fix-suggestions.md`,
-  },
+  { name: "ai-decision.json", url: `${PAGES_BASE_URL}/ai-decision.json` },
+  { name: "remediation-plan.json", url: `${PAGES_BASE_URL}/remediation-plan.json` },
+  { name: "fix-suggestions.json", url: `${PAGES_BASE_URL}/fix-suggestions.json` },
+  { name: "langgraph-run-summary.json", url: `${PAGES_BASE_URL}/langgraph-run-summary.json` },
+  { name: "fix-suggestions.md", url: `${PAGES_BASE_URL}/fix-suggestions.md` },
 ]
 
 export default function DevSecOpsDashboard() {
@@ -224,6 +209,15 @@ export default function DevSecOpsDashboard() {
   }, [])
 
   const scanSummary = aiDecision?.summary
+
+  const sourceSecurityStatus =
+    remediationPlan?.source_security_status &&
+    remediationPlan.source_security_status !== "UNKNOWN"
+      ? remediationPlan.source_security_status
+      : aiDecision?.status || "UNKNOWN"
+
+  const sourceSecurityReason =
+    remediationPlan?.source_security_reason || aiDecision?.reason || ""
 
   const overview = useMemo(() => {
     const critical = (scanSummary?.trivy?.CRITICAL || 0) + (scanSummary?.npm_audit?.critical || 0)
@@ -500,7 +494,9 @@ export default function DevSecOpsDashboard() {
           </Card>
 
           <Card title="Workflow LangGraph">
-            <p className="text-[48px] font-bold leading-none text-slate-950">{langgraphSummary?.status || "SUCCESS"}</p>
+            <p className="text-[48px] font-bold leading-none text-slate-950">
+              {langgraphSummary?.status || "SUCCESS"}
+            </p>
             <p className="mt-3 text-[15px] text-slate-600">
               Nœuds exécutés : {overview.executedNodes.length > 0 ? overview.executedNodes.join(" → ") : "Aucun"}
             </p>
@@ -628,17 +624,13 @@ export default function DevSecOpsDashboard() {
             <div className="mb-4 rounded-[22px] bg-slate-50 p-5">
               <div className="text-sm text-slate-600">
                 Source security status:{" "}
-                <span className="font-medium text-slate-900">
-                  {remediationPlan?.source_security_status || "UNKNOWN"}
-                </span>
+                <span className="font-medium text-slate-900">{sourceSecurityStatus}</span>
               </div>
 
-              {remediationPlan?.source_security_reason ? (
+              {sourceSecurityReason ? (
                 <div className="mt-2 text-sm text-slate-600">
                   Source reason:{" "}
-                  <span className="font-medium text-slate-900">
-                    {remediationPlan.source_security_reason}
-                  </span>
+                  <span className="font-medium text-slate-900">{sourceSecurityReason}</span>
                 </div>
               ) : null}
             </div>
@@ -769,7 +761,10 @@ export default function DevSecOpsDashboard() {
           <Card title="Artefacts générés">
             <div className="space-y-4">
               {artifactLinks.map((artifact) => (
-                <div key={artifact.name} className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4">
+                <div
+                  key={artifact.name}
+                  className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4"
+                >
                   <span className="text-[16px] font-medium text-slate-900">{artifact.name}</span>
                   <a
                     href={artifact.url}
