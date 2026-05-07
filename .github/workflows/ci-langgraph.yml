@@ -468,10 +468,18 @@ jobs:
         run: |
           echo "Artifacts tree:"
           find artifacts -maxdepth 4 -type f | sort || true
+      - name: Debug artifact tree
+        run: |
+          echo "===== FULL ARTIFACT TREE ====="
+          find artifacts -maxdepth 5 -type f | sort || true
 
       - name: Prepare dashboard publish folder
         run: |
           bash scripts/prepare_dashboard_publish.sh
+      - name: Show published files
+        run: |
+          echo "===== DASHBOARD SITE CONTENT ====="
+          find dashboard-site -maxdepth 5 -type f | sort || true
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
