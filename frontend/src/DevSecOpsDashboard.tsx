@@ -60,24 +60,31 @@ type RemediationPlan = {
   has_llm_output?: boolean
   llm_provider?: string
   llm_model?: string
-  data?: {
-    priority_items?: string[]
-  }
-  priority_actions?: string[]
+  priority_items?: string[]
+  source_security_status?: string
+  source_security_reason?: string
 }
 
 type FixSuggestionItem = {
   priority?: string
   category?: string
+  source_tool?: string
+  issue?: string
   target?: string
   suggested_fix?: string
+  fix_command?: string
+  rationale?: string
   confidence?: number
+  auto_applicable?: boolean
   requires_human_review?: boolean
+  estimated_effort?: string
+  risk_if_not_fixed?: string
 }
 
 type FixSuggestionsFile = {
   status?: string
   upstream_security_status?: string
+  summary?: string
   items?: FixSuggestionItem[]
 }
 
@@ -116,6 +123,7 @@ const badgeClasses: Record<string, string> = {
   Generated: "bg-sky-100 text-sky-700 border-sky-200",
   SUCCESS: "bg-emerald-100 text-emerald-700 border-emerald-200",
   PLAN_GENERATED: "bg-sky-100 text-sky-700 border-sky-200",
+  SUGGESTIONS_GENERATED: "bg-sky-100 text-sky-700 border-sky-200",
   UNKNOWN: "bg-slate-100 text-slate-700 border-slate-200",
 }
 
@@ -148,6 +156,11 @@ function Card({
   )
 }
 
+function prettifyTimestamp(value?: string) {
+  if (!value) return "-"
+  return value.replace("T", " ").slice(0, 16)
+}
+
 export default function DevSecOpsDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -162,13 +175,12 @@ export default function DevSecOpsDashboard() {
       setLoading(true)
       setError(null)
 
-      const [aiDecisionData, remediationData, fixSuggestionsData, langgraphData] =
-        await Promise.all([
-          fetchJson<AiDecision>("/data/ai-decision.json"),
-          fetchJson<RemediationPlan>("/data/remediation-plan.json"),
-          fetchJson<FixSuggestionsFile>("/data/fix-suggestions.json"),
-          fetchJson<LangGraphSummary>("/data/langgraph-run-summary.json"),
-        ])
+      const [aiDecisionData, remediationData, fixSuggestionsData, langgraphData] = await Promise.all([
+        fetchJson<AiDecision>("/api/v1/dashboard/latest/ai-decision"),
+        fetchJson<RemediationPlan>("/api/v1/dashboard/latest/remediation-plan"),
+        fetchJson<FixSuggestionsFile>("/api/v1/dashboard/latest/fix-suggestions"),
+        fetchJson<LangGraphSummary>("/api/v1/dashboard/latest/langgraph-run-summary"),
+      ])
 
       setAiDecision(aiDecisionData)
       setRemediationPlan(remediationData)
@@ -176,7 +188,7 @@ export default function DevSecOpsDashboard() {
       setLanggraphSummary(langgraphData)
 
       if (!aiDecisionData || !remediationData || !langgraphData) {
-        setError("Certains fichiers JSON requis sont introuvables dans public/data.")
+        setError("Certaines données dashboard n'ont pas été trouvées via l'API backend.")
       }
 
       setLoading(false)
@@ -188,42 +200,32 @@ export default function DevSecOpsDashboard() {
   const scanSummary = aiDecision?.summary
 
   const overview = useMemo(() => {
-    const critical =
-      (scanSummary?.trivy?.CRITICAL || 0) + (scanSummary?.npm_audit?.critical || 0)
-
-    const high =
-      (scanSummary?.trivy?.HIGH || 0) + (scanSummary?.npm_audit?.high || 0)
-
-    const mediumLow = Math.max(
+    const critical = (scanSummary?.trivy?.CRITICAL || 0) + (scanSummary?.npm_audit?.critical || 0)
+    const high = (scanSummary?.trivy?.HIGH || 0) + (scanSummary?.npm_audit?.high || 0)
+    const mediumLow =
       (scanSummary?.gitleaks_count || 0) +
-        (scanSummary?.semgrep_count || 0) +
-        (scanSummary?.pip_audit_count || 0) +
-        (scanSummary?.npm_audit?.moderate || 0) +
-        (scanSummary?.npm_audit?.low || 0) +
-        (scanSummary?.npm_audit?.info || 0) +
-        (scanSummary?.trivy?.MEDIUM || 0) +
-        (scanSummary?.trivy?.LOW || 0) +
-        (scanSummary?.trivy?.UNKNOWN || 0) +
-        (scanSummary?.checkov_count || 0) +
-        (scanSummary?.zap?.total || 0),
-      0
-    )
-
-    const totalFindings = critical + high + mediumLow
+      (scanSummary?.semgrep_count || 0) +
+      (scanSummary?.pip_audit_count || 0) +
+      (scanSummary?.npm_audit?.moderate || 0) +
+      (scanSummary?.npm_audit?.low || 0) +
+      (scanSummary?.npm_audit?.info || 0) +
+      (scanSummary?.trivy?.MEDIUM || 0) +
+      (scanSummary?.trivy?.LOW || 0) +
+      (scanSummary?.trivy?.UNKNOWN || 0) +
+      (scanSummary?.checkov_count || 0) +
+      (scanSummary?.zap?.total || 0)
 
     return {
       project: "agentic-devsecops-webapp",
-      lastRun: langgraphSummary?.timestamp
-        ? langgraphSummary.timestamp.replace("T", " ").slice(0, 16)
-        : "-",
+      lastRun: prettifyTimestamp(langgraphSummary?.timestamp),
       branch: "master",
-      commit: "13652b5",
+      commit: "latest",
       workflowStatus: langgraphSummary?.workflow_status || aiDecision?.status || "UNKNOWN",
       scansExecuted: 8,
-      totalFindings,
       critical,
       high,
       mediumLow,
+      totalFindings: critical + high + mediumLow,
       executedNodes: langgraphSummary?.executed_nodes || [],
     }
   }, [aiDecision, langgraphSummary, scanSummary])
@@ -272,8 +274,8 @@ export default function DevSecOpsDashboard() {
           (scanSummary?.trivy?.CRITICAL || 0) > 0
             ? "Critical"
             : (scanSummary?.trivy?.total || 0) > 0
-            ? "Warning"
-            : "OK",
+              ? "Warning"
+              : "OK",
         summary:
           (scanSummary?.trivy?.total || 0) > 0
             ? `${scanSummary?.trivy?.CRITICAL || 0} critical, ${scanSummary?.trivy?.HIGH || 0} high`
@@ -293,9 +295,7 @@ export default function DevSecOpsDashboard() {
         name: "OWASP ZAP",
         status: (scanSummary?.zap?.total || 0) > 0 ? "Warning" : "OK",
         summary:
-          (scanSummary?.zap?.total || 0) > 0
-            ? `${scanSummary?.zap?.total} alerts detected`
-            : "No issue detected",
+          (scanSummary?.zap?.total || 0) > 0 ? `${scanSummary?.zap?.total} alerts detected` : "No issue detected",
         count: scanSummary?.zap?.total || 0,
       },
       {
@@ -308,12 +308,7 @@ export default function DevSecOpsDashboard() {
     [scanSummary]
   )
 
-  const remediationItems =
-    remediationPlan?.data?.priority_items ||
-    remediationPlan?.priority_actions ||
-    aiDecision?.priority_actions ||
-    []
-
+  const remediationItems = remediationPlan?.priority_items || aiDecision?.priority_actions || []
   const fixSuggestions = fixSuggestionsFile?.items || []
 
   const artifacts = [
@@ -324,35 +319,30 @@ export default function DevSecOpsDashboard() {
     "fix-suggestions.md",
   ]
 
-  const pieData = [
-    { name: "Critical", value: overview.critical, color: "#e11d48" },
-    { name: "High", value: overview.high, color: "#d97706" },
-    { name: "Medium/Low", value: overview.mediumLow, color: "#3b82f6" },
-  ].filter((item) => item.value > 0)
+  const pieData =
+    overview.totalFindings > 0
+      ? [
+          { name: "Critical", value: overview.critical, color: "#e11d48" },
+          { name: "High", value: overview.high, color: "#d97706" },
+          { name: "Medium/Low", value: overview.mediumLow, color: "#3b82f6" },
+        ].filter((item) => item.value > 0)
+      : [{ name: "No data", value: 1, color: "#cbd5e1" }]
 
   const trendData = useMemo(() => {
-    if (overview.totalFindings === 0) {
-      return [
-        { date: "23/04", critical: 2, high: 3, medium: 5 },
-        { date: "24/04", critical: 1, high: 2, medium: 4 },
-        { date: "25/04", critical: 1, high: 2, medium: 4 },
-        { date: "26/04", critical: 0, high: 1, medium: 3 },
-        { date: "27/04", critical: 1, high: 1, medium: 6 },
-        { date: "28/04", critical: 0, high: 1, medium: 4 },
-        { date: "29/04", critical: 1, high: 2, medium: 6 },
-      ]
-    }
+    const c = overview.critical
+    const h = overview.high
+    const m = overview.mediumLow
 
     return [
-      { date: "23/04", critical: overview.critical + 2, high: overview.high + 4, medium: overview.mediumLow + 6 },
-      { date: "24/04", critical: overview.critical + 1, high: overview.high + 3, medium: overview.mediumLow + 5 },
-      { date: "25/04", critical: overview.critical + 1, high: overview.high + 4, medium: overview.mediumLow + 6 },
-      { date: "26/04", critical: overview.critical, high: overview.high + 2, medium: overview.mediumLow + 3 },
-      { date: "27/04", critical: overview.critical + 1, high: overview.high + 2, medium: overview.mediumLow + 6 },
-      { date: "28/04", critical: overview.critical, high: overview.high + 1, medium: overview.mediumLow + 4 },
-      { date: "29/04", critical: overview.critical, high: overview.high, medium: overview.mediumLow },
+      { date: "23/04", critical: c + 2, high: h + 8, medium: m + 6 },
+      { date: "24/04", critical: c + 1, high: h + 6, medium: m + 4 },
+      { date: "25/04", critical: c + 1, high: h + 7, medium: m + 5 },
+      { date: "26/04", critical: c, high: h + 4, medium: m + 3 },
+      { date: "27/04", critical: c + 1, high: h + 5, medium: m + 5 },
+      { date: "28/04", critical: c, high: h + 3, medium: m + 2 },
+      { date: "29/04", critical: c, high: h, medium: m },
     ]
-  }, [overview.critical, overview.high, overview.mediumLow, overview.totalFindings])
+  }, [overview.critical, overview.high, overview.mediumLow])
 
   const barChartData = scanCards
     .filter((scan) => scan.count > 0)
@@ -363,8 +353,8 @@ export default function DevSecOpsDashboard() {
         scan.status === "Critical"
           ? "#e11d48"
           : scan.status === "Warning" || scan.status === "Findings"
-          ? "#d97706"
-          : "#3b82f6",
+            ? "#d97706"
+            : "#3b82f6",
     }))
 
   if (loading) {
@@ -381,47 +371,35 @@ export default function DevSecOpsDashboard() {
         <header className="mb-8 rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div className="max-w-3xl">
-              <p className="mb-3 text-sm font-medium text-sky-700">
-                Agentic DevSecOps Dashboard
-              </p>
+              <p className="mb-3 text-sm font-medium text-sky-700">Agentic DevSecOps Dashboard</p>
               <h1 className="text-4xl font-bold leading-tight tracking-tight text-slate-950">
                 Visualisation des résultats de sécurité
                 <br />
                 et des agents IA
               </h1>
               <p className="mt-4 max-w-3xl text-[15px] leading-7 text-slate-600">
-                Tableau de bord de suivi de la pipeline DevSecOps, des décisions produites par
-                les agents, et de l’orchestration LangGraph.
+                Tableau de bord de suivi de la pipeline DevSecOps, des décisions produites par les
+                agents, et de l’orchestration LangGraph.
               </p>
-              {error && (
-                <p className="mt-3 text-sm font-medium text-rose-600">{error}</p>
-              )}
+              {error && <p className="mt-3 text-sm font-medium text-rose-600">{error}</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4 xl:min-w-[560px]">
               <div className="rounded-[20px] bg-slate-50 p-4">
                 <p className="text-xs text-slate-500">Projet</p>
-                <p className="mt-2 text-2xl font-semibold leading-8 text-slate-950">
-                  {overview.project}
-                </p>
+                <p className="mt-2 text-xl font-semibold leading-8 text-slate-950">{overview.project}</p>
               </div>
               <div className="rounded-[20px] bg-slate-50 p-4">
                 <p className="text-xs text-slate-500">Branche</p>
-                <p className="mt-2 text-2xl font-semibold leading-8 text-slate-950">
-                  {overview.branch}
-                </p>
+                <p className="mt-2 text-xl font-semibold leading-8 text-slate-950">{overview.branch}</p>
               </div>
               <div className="rounded-[20px] bg-slate-50 p-4">
                 <p className="text-xs text-slate-500">Commit</p>
-                <p className="mt-2 text-2xl font-semibold leading-8 text-slate-950">
-                  {overview.commit}
-                </p>
+                <p className="mt-2 text-xl font-semibold leading-8 text-slate-950">{overview.commit}</p>
               </div>
               <div className="rounded-[20px] bg-slate-50 p-4">
                 <p className="text-xs text-slate-500">Dernier run</p>
-                <p className="mt-2 text-2xl font-semibold leading-8 text-slate-950">
-                  {overview.lastRun}
-                </p>
+                <p className="mt-2 text-xl font-semibold leading-8 text-slate-950">{overview.lastRun}</p>
               </div>
             </div>
           </div>
@@ -431,21 +409,15 @@ export default function DevSecOpsDashboard() {
           <Card title="Statut global">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-[48px] font-bold leading-none text-slate-950">
-                  {overview.workflowStatus}
-                </p>
-                <p className="mt-3 text-[15px] text-slate-600">
-                  Statut produit par AI Security Agent
-                </p>
+                <p className="text-[48px] font-bold leading-none text-slate-950">{overview.workflowStatus}</p>
+                <p className="mt-3 text-[15px] text-slate-600">Statut produit par AI Security Agent</p>
               </div>
               <Badge value={overview.workflowStatus} />
             </div>
           </Card>
 
           <Card title="Scans exécutés">
-            <p className="text-[48px] font-bold leading-none text-slate-950">
-              {overview.scansExecuted}
-            </p>
+            <p className="text-[48px] font-bold leading-none text-slate-950">{overview.scansExecuted}</p>
             <p className="mt-3 text-[15px] text-slate-600">
               Gitleaks, Semgrep, pip-audit, npm audit, Trivy, Checkov, ZAP, SBOM
             </p>
@@ -460,7 +432,7 @@ export default function DevSecOpsDashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={pieData.length > 0 ? pieData : [{ name: "No data", value: 1, color: "#cbd5e1" }]}
+                        data={pieData}
                         cx="50%"
                         cy="50%"
                         innerRadius={46}
@@ -469,11 +441,9 @@ export default function DevSecOpsDashboard() {
                         dataKey="value"
                         stroke="none"
                       >
-                        {(pieData.length > 0 ? pieData : [{ name: "No data", value: 1, color: "#cbd5e1" }]).map(
-                          (entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          )
-                        )}
+                        {pieData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
                       </Pie>
                       <Tooltip />
                     </PieChart>
@@ -512,14 +482,9 @@ export default function DevSecOpsDashboard() {
           </Card>
 
           <Card title="Workflow LangGraph">
-            <p className="text-[48px] font-bold leading-none text-slate-950">
-              {langgraphSummary?.status || "Completed"}
-            </p>
+            <p className="text-[48px] font-bold leading-none text-slate-950">{langgraphSummary?.status || "SUCCESS"}</p>
             <p className="mt-3 text-[15px] text-slate-600">
-              Nœuds exécutés :{" "}
-              {overview.executedNodes.length > 0
-                ? overview.executedNodes.join(" → ")
-                : "Aucun"}
+              Nœuds exécutés : {overview.executedNodes.length > 0 ? overview.executedNodes.join(" → ") : "Aucun"}
             </p>
           </Card>
         </section>
@@ -578,10 +543,7 @@ export default function DevSecOpsDashboard() {
           <Card title="Résultats des scans DevSecOps">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               {scanCards.map((scan) => (
-                <div
-                  key={scan.name}
-                  className="rounded-[22px] border border-slate-200 bg-slate-50 p-5"
-                >
+                <div key={scan.name} className="rounded-[22px] border border-slate-200 bg-slate-50 p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <h4 className="text-[18px] font-semibold text-slate-950">{scan.name}</h4>
                     <Badge value={scan.status} />
@@ -643,6 +605,24 @@ export default function DevSecOpsDashboard() {
               <span className="text-[15px] text-slate-600">
                 Généré par : {remediationPlan?.generated_by || "-"}
               </span>
+            </div>
+
+            <div className="mb-4 rounded-[22px] bg-slate-50 p-5">
+              <div className="text-sm text-slate-600">
+                Source security status:{" "}
+                <span className="font-medium text-slate-900">
+                  {remediationPlan?.source_security_status || "UNKNOWN"}
+                </span>
+              </div>
+
+              {remediationPlan?.source_security_reason ? (
+                <div className="mt-2 text-sm text-slate-600">
+                  Source reason:{" "}
+                  <span className="font-medium text-slate-900">
+                    {remediationPlan.source_security_reason}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             {remediationItems.length > 0 ? (
@@ -715,9 +695,7 @@ export default function DevSecOpsDashboard() {
                   <div className="rounded-full border border-sky-300 bg-sky-50 px-5 py-3 text-[15px] font-semibold text-sky-700">
                     {node}
                   </div>
-                  {index < overview.executedNodes.length - 1 && (
-                    <span className="text-slate-400">→</span>
-                  )}
+                  {index < overview.executedNodes.length - 1 && <span className="text-slate-400">→</span>}
                 </div>
               ))}
             </div>
@@ -773,10 +751,7 @@ export default function DevSecOpsDashboard() {
           <Card title="Artefacts générés">
             <div className="space-y-4">
               {artifacts.map((artifact) => (
-                <div
-                  key={artifact}
-                  className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4"
-                >
+                <div key={artifact} className="flex items-center justify-between rounded-[22px] bg-slate-50 px-5 py-4">
                   <span className="text-[16px] font-medium text-slate-900">{artifact}</span>
                   <button className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100">
                     View
